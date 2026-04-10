@@ -230,8 +230,12 @@ Fill in `.env.local`:
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase > Settings > API > Project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase > Settings > API > anon public |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase > Settings > API > service_role |
+| `SUPABASE_ACCESS_TOKENS` | Supabase > Access Tokens (migration/CLI) |
+| `GITHUB_CLASSIC_TOKEN` | GitHub > Settings > Developer settings > Personal access tokens (Classic) |
 | `EPIAS_USERNAME` | EPİAŞ Şeffaflık Portal login email |
 | `EPIAS_PASSWORD` | EPİAŞ Şeffaflık Portal password |
+| `ENTSOE_API_KEY` | ENTSO-E Transparency API token (opsiyonel) |
+| `NEXT_PUBLIC_ML_API_URL` | Python FastAPI adresi (varsayılan: `http://localhost:8000`) |
 
 ### 3. Database Migration
 
