@@ -159,8 +159,8 @@ Daily model comparison results.
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/matrixprompter/Enerji-Tahmin-Sistemi.git
-cd Enerji-Tahmin-Sistemi
+git clone https://github.com/matrixprompter/Energy-Forecast-System.git
+cd Energy-Forecast-System
 npm install
 ```
 
@@ -289,14 +289,6 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 | EPİAŞ | seffaflik.epias.com.tr | Not required |
 | ENTSO-E | transparency.entsoe.eu | Free registration + API token |
 | Open-Meteo | open-meteo.com | Not required |
-
-## Project Phases
-
-- [x] **Phase 0** — Project Setup (skeleton, dependencies)
-- [x] **Phase 1** — Supabase Database (tables, RLS, indexes, seed data)
-- [x] **Phase 2** — Python ML Pipeline (data collection, feature engineering, 3 models, FastAPI)
-- [x] **Phase 3** — Dashboard UI (Next.js 16, Chart.js, responsive, Turkish, onboarding, export)
-- [ ] **Phase 4** — Deployment (Vercel + Render)
 
 ## License
 
