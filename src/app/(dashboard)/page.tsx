@@ -450,11 +450,11 @@ export default function DashboardPage() {
   const hm = heatmap ?? generateDemoHeatmap();
   const tr = tableRows ?? generateDemoTableRows(24);
 
-  const avgConsumption = tl.actual.reduce((a, b) => a + b, 0) / tl.actual.length;
-  const hourlyTotals = Array.from({ length: 24 }, (_, h) =>
-    tl.actual.filter((_, i) => i % 24 === h).reduce((a, b) => a + b, 0)
-  );
-  const peakHour = hourlyTotals.indexOf(Math.max(...hourlyTotals));
+  // KPI: tablo verisi varsa son 24 saatten hesapla, yoksa timeline'dan
+  const kpiSource = tr;
+  const avgConsumption = kpiSource.reduce((a, b) => a + b.actual, 0) / kpiSource.length;
+  const peakRow = kpiSource.reduce((best, row) => (row.actual > best.actual ? row : best), kpiSource[0]);
+  const peakHour = parseInt(peakRow?.hour ?? "0", 10);
   const bestMape = Math.min(comparison.prophet.mape, comparison.xgboost.mape, comparison.sarima.mape);
   const kpiWinner = tableMetrics ? tableMetrics.winner : winner;
   const kpiBestMape = tableMetrics
