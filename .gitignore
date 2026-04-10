@@ -44,4 +44,5 @@ venv/
 *.tsbuildinfo
 next-env.d.ts
 .claude/
+project-plan/
 .env.local
