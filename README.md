@@ -159,8 +159,8 @@ Daily model comparison results.
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/matrixprompter/Energy-Forecast-System.git
-cd Energy-Forecast-System
+git clone https://github.com/matrixprompter/Energy-Consumption-Forecasting-System.git
+cd Energy-Consumption-Forecasting-System
 npm install
 ```
 
