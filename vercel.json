@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/update-data",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/run-forecast",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}

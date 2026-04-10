@@ -1,0 +1,47 @@
+# dependencies
+node_modules/
+python/__pycache__/
+python/*.pyc
+python/models/__pycache__/
+
+# next.js
+.next/
+out/
+
+# build
+dist/
+build/
+
+# env files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# python
+*.egg-info/
+venv/
+.venv/
+*.pkl
+*.joblib
+
+# misc
+*.tsbuildinfo
+next-env.d.ts
+.claude/
+.env.local
