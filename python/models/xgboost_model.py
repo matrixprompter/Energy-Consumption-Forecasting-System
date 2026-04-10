@@ -3,7 +3,7 @@ P2-204: XGBoost Modeli
 XGBRegressor + SHAP açıklanabilirlik
 """
 
-import pickle
+import joblib
 from pathlib import Path
 from typing import Any
 
@@ -182,12 +182,12 @@ class XGBoostForecaster:
         return float(self.model.predict(X)[0])
 
     def _save_model(self):
+        """Modeli .pkl olarak kaydeder (joblib — lazy-load uyumlu)."""
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.model_path, "wb") as f:
-            pickle.dump(self.model, f)
+        joblib.dump(self, self.model_path, compress=3)
 
     def _load_model(self):
         if not self.model_path.exists():
             raise FileNotFoundError(f"XGBoost model bulunamadı: {self.model_path}")
-        with open(self.model_path, "rb") as f:
-            self.model = pickle.load(f)
+        loaded = joblib.load(self.model_path)
+        self.model = loaded.model

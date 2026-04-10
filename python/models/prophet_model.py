@@ -3,7 +3,7 @@ P2-203: Prophet Modeli
 Meta Prophet — günlük + yıllık mevsimsellik, tatil günleri, güven aralıkları
 """
 
-import pickle
+import joblib
 from pathlib import Path
 from typing import Any
 
@@ -130,7 +130,7 @@ class ProphetForecaster:
         eval_df["ds"] = eval_df["ds"].dt.tz_localize(None)
 
         if "weather_temp" in self.model.extra_regressors and "weather_temp" in test_df.columns:
-            eval_df["weather_temp"] = test_df["weather_temp"].values
+            eval_df["weather_temp"] = test_df["weather_temp"].fillna(test_df["weather_temp"].median()).values
 
         forecast = self.model.predict(eval_df)
         y_true = eval_df["y"].values
@@ -153,12 +153,12 @@ class ProphetForecaster:
         return metrics, y_pred.tolist()
 
     def _save_model(self):
+        """Modeli .pkl olarak kaydeder (joblib — lazy-load uyumlu)."""
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.model_path, "wb") as f:
-            pickle.dump(self.model, f)
+        joblib.dump(self, self.model_path, compress=3)
 
     def _load_model(self):
         if not self.model_path.exists():
             raise FileNotFoundError(f"Prophet model bulunamadı: {self.model_path}")
-        with open(self.model_path, "rb") as f:
-            self.model = pickle.load(f)
+        loaded = joblib.load(self.model_path)
+        self.model = loaded.model

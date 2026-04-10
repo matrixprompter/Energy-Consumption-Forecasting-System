@@ -56,7 +56,7 @@ export function FeatureImportance({ features }: FeatureImportanceProps) {
   };
 
   return (
-    <Card className="overflow-hidden" data-onboarding="feature-importance">
+    <Card data-onboarding="feature-importance">
       <CardHeader className="px-4 pb-2 sm:px-6">
         <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
           Özellik Önemi (XGBoost SHAP)

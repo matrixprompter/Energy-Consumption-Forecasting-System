@@ -1,12 +1,20 @@
 """
-P2-207: FastAPI Endpoints
+P2-207: FastAPI Endpoints (Lazy-Load Pattern)
 POST /forecast, GET /latest-forecast, GET /model-comparison,
 GET /feature-importance, POST /update-data, GET /health
+
+Lazy-Load Stratejisi (Render Free Tier — 512 MB RAM):
+  - Modeller istek geldiğinde yüklenir (joblib.load)
+  - İşlem bitince bellekten atılır (del + gc.collect)
+  - 3 model aynı anda bellekte durmaz
 """
 
-from contextlib import asynccontextmanager
+import gc
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
+import joblib
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -15,38 +23,58 @@ from supabase import create_client
 from config import SUPABASE_SERVICE_KEY, SUPABASE_URL
 from data_collector import collect_data
 from feature_engineering import create_features, get_feature_columns
-from models import ProphetForecaster, SARIMAForecaster, XGBoostForecaster
 
 # ---------------------------------------------------------------------------
-# Modelleri başlangıçta yükle
+# Model dosya yolları
 # ---------------------------------------------------------------------------
-prophet = ProphetForecaster()
-xgboost_model = XGBoostForecaster()
-sarima = SARIMAForecaster()
-loaded_models: list[str] = []
+MODELS_DIR = Path(__file__).parent / "models" / "saved"
 
+MODEL_PATHS = {
+    "prophet": MODELS_DIR / "prophet_model.pkl",
+    "xgboost": MODELS_DIR / "xgboost_model.pkl",
+    "sarima": MODELS_DIR / "sarima_model.pkl",
+}
+
+
+def get_available_models() -> list[str]:
+    """Eğitilmiş ve .pkl dosyası mevcut olan modelleri döndürür."""
+    return [name for name, path in MODEL_PATHS.items() if path.exists()]
+
+
+@contextmanager
+def load_model(model_name: str):
+    """
+    Lazy-load context manager — modeli yükle, kullan, bellekten at.
+
+    Kullanım:
+        with load_model("xgboost") as model:
+            prediction = model.predict(X)
+        # with bloğu bitince model bellekten silinir
+    """
+    path = MODEL_PATHS.get(model_name)
+    if not path or not path.exists():
+        raise FileNotFoundError(f"{model_name} modeli bulunamadı: {path}")
+
+    model = joblib.load(path)
+    try:
+        yield model
+    finally:
+        del model
+        gc.collect()
+
+
+# ---------------------------------------------------------------------------
+# Supabase client
+# ---------------------------------------------------------------------------
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Uygulama başlangıcında modelleri yükle."""
-    global loaded_models
-    for name, model in [("prophet", prophet), ("xgboost", xgboost_model), ("sarima", sarima)]:
-        try:
-            model._load_model()
-            loaded_models.append(name)
-            print(f"  {name} modeli yüklendi.")
-        except FileNotFoundError:
-            print(f"  {name} modeli bulunamadı — eğitim gerekli.")
-    yield
-
-
+# ---------------------------------------------------------------------------
+# FastAPI
+# ---------------------------------------------------------------------------
 app = FastAPI(
     title="Enerji Tüketim Tahmin API",
-    description="Prophet, XGBoost ve SARIMA modelleri ile saatlik enerji tüketim tahmini",
-    version="1.0.0",
-    lifespan=lifespan,
+    description="Prophet, XGBoost ve SARIMA modelleri ile saatlik enerji tüketim tahmini (Lazy-Load)",
+    version="1.1.0",
 )
 
 app.add_middleware(
@@ -87,53 +115,102 @@ async def health():
     """Servis sağlık kontrolü."""
     return {
         "status": "healthy",
-        "models_loaded": loaded_models,
+        "models_available": get_available_models(),
+        "lazy_load": True,
     }
 
 
 @app.post("/forecast")
 async def forecast(req: ForecastRequest) -> dict[str, Any]:
-    """Zaman serisi tahmini üretir."""
+    """Zaman serisi tahmini üretir (model lazy-load ile yüklenir)."""
     if req.model not in ("prophet", "xgboost", "sarima"):
         raise HTTPException(400, f"Geçersiz model: {req.model}")
 
-    if req.model not in loaded_models:
-        raise HTTPException(503, f"{req.model} modeli henüz eğitilmemiş.")
+    if req.model not in get_available_models():
+        raise HTTPException(503, f"{req.model} modeli henüz eğitilmemiş. Önce evaluate.py çalıştırın.")
 
     try:
-        if req.model == "prophet":
-            predictions = prophet.predict(horizon=req.horizon)
-        elif req.model == "sarima":
-            predictions = sarima.predict(horizon=req.horizon)
-        else:
-            # XGBoost için son verilerden özellik üret
-            response = (
-                supabase.table("energy_readings")
-                .select("*")
-                .order("timestamp", desc=True)
-                .limit(200)
-                .execute()
-            )
-            import pandas as pd
+        import pandas as pd
+        import numpy as np
 
-            df = pd.DataFrame(response.data)
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-            df = df.sort_values("timestamp").reset_index(drop=True)
-            df_feat = create_features(df)
-            features = get_feature_columns()
-            last_row = df_feat.iloc[-1][features]
+        with load_model(req.model) as model:
+            if req.model == "prophet":
+                # ProphetForecaster instance — predict(horizon) doğrudan çalışır
+                predictions = model.predict(horizon=req.horizon)
 
-            predictions = []
-            for h in range(req.horizon):
-                pred = xgboost_model.predict(pd.DataFrame([last_row]))[0]
-                predictions.append(
-                    {
-                        "timestamp": "",
-                        "value": round(float(pred), 2),
-                        "lower": round(float(pred * 0.95), 2),
-                        "upper": round(float(pred * 1.05), 2),
-                    }
+            elif req.model == "sarima":
+                # SARIMA pkl dict olarak kaydedildi — model_results içinden tahmin yap
+                if isinstance(model, dict):
+                    sarima_results = model["model_results"]
+                    forecast = sarima_results.get_forecast(steps=req.horizon)
+                    mean = forecast.predicted_mean
+                    conf = forecast.conf_int(alpha=0.05)
+                    predictions = []
+                    for i in range(req.horizon):
+                        predictions.append({
+                            "timestamp": str(mean.index[i]) if hasattr(mean.index[i], '__str__') else "",
+                            "value": round(float(mean.iloc[i]), 2),
+                            "lower": round(float(conf.iloc[i, 0]), 2),
+                            "upper": round(float(conf.iloc[i, 1]), 2),
+                        })
+                else:
+                    predictions = model.predict(horizon=req.horizon)
+
+            else:
+                # XGBoost — son verilerden özellik üret, her adımda güncelle
+                response = (
+                    supabase.table("energy_readings")
+                    .select("*")
+                    .order("timestamp", desc=True)
+                    .limit(200)
+                    .execute()
                 )
+                df = pd.DataFrame(response.data)
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                df = df.sort_values("timestamp").reset_index(drop=True)
+                df_feat = create_features(df)
+                features = get_feature_columns()
+
+                # Consumption serisini al — rolling hesaplamalar için
+                consumption_series = df_feat["consumption_mwh"].tolist()
+                last_row = df_feat.iloc[-1][features].copy()
+
+                predictions = []
+                for h in range(req.horizon):
+                    pred = float(model.predict(pd.DataFrame([last_row]))[0])
+                    predictions.append({
+                        "timestamp": "",
+                        "value": round(pred, 2),
+                        "lower": round(pred * 0.95, 2),
+                        "upper": round(pred * 1.05, 2),
+                    })
+
+                    # Bir sonraki adım için özellikleri güncelle
+                    consumption_series.append(pred)
+                    last_row["lag_1h"] = pred
+                    if len(consumption_series) >= 24:
+                        last_row["lag_24h"] = consumption_series[-24]
+                    if len(consumption_series) >= 168:
+                        last_row["lag_168h"] = consumption_series[-168]
+
+                    recent_24 = consumption_series[-24:]
+                    last_row["rolling_mean_24h"] = np.mean(recent_24)
+                    last_row["rolling_std_24h"] = np.std(recent_24) if len(recent_24) > 1 else 0
+
+                    if len(consumption_series) >= 168:
+                        recent_168 = consumption_series[-168:]
+                        last_row["rolling_mean_168h"] = np.mean(recent_168)
+                        last_row["rolling_std_168h"] = np.std(recent_168)
+
+                    # Zaman özelliklerini ilerlet
+                    current_hour = int(last_row["hour"])
+                    next_hour = (current_hour + 1) % 24
+                    last_row["hour"] = next_hour
+
+                    if next_hour == 0:
+                        next_dow = (int(last_row["day_of_week"]) + 1) % 7
+                        last_row["day_of_week"] = next_dow
+                        last_row["is_weekend"] = 1 if next_dow >= 5 else 0
 
         # Son MAPE değerini al
         last_forecast = (
@@ -154,6 +231,8 @@ async def forecast(req: ForecastRequest) -> dict[str, Any]:
             },
             "mape": mape,
         }
+    except FileNotFoundError as e:
+        raise HTTPException(503, str(e))
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -202,7 +281,6 @@ async def model_comparison() -> dict[str, Any]:
 
     row = response.data[0]
 
-    # Her model için en son forecasts tablosundan detaylı metrikler
     result: dict[str, Any] = {}
     for model_name in ["prophet", "xgboost", "sarima"]:
         f_resp = (
@@ -228,12 +306,13 @@ async def model_comparison() -> dict[str, Any]:
 
 @app.get("/feature-importance")
 async def feature_importance() -> dict[str, Any]:
-    """XGBoost SHAP değerleri."""
-    if "xgboost" not in loaded_models:
+    """XGBoost SHAP değerleri (lazy-load)."""
+    if "xgboost" not in get_available_models():
         raise HTTPException(503, "XGBoost modeli yüklenmemiş.")
 
     try:
-        # Son verilerden SHAP hesapla
+        import pandas as pd
+
         response = (
             supabase.table("energy_readings")
             .select("*")
@@ -241,8 +320,6 @@ async def feature_importance() -> dict[str, Any]:
             .limit(500)
             .execute()
         )
-        import pandas as pd
-
         df = pd.DataFrame(response.data)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df = df.sort_values("timestamp").reset_index(drop=True)
@@ -252,7 +329,9 @@ async def feature_importance() -> dict[str, Any]:
         df_clean = df_feat.dropna(subset=features)
         X = df_clean[features]
 
-        shap_values = xgboost_model.get_shap_values(X)
+        with load_model("xgboost") as model:
+            shap_values = model.get_shap_values(X)
+
         return {"features": shap_values}
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -270,14 +349,15 @@ async def update_data(req: UpdateDataRequest) -> dict[str, Any]:
 
 @app.post("/scenario")
 async def scenario_analysis(req: ScenarioRequest) -> dict[str, Any]:
-    """Senaryo analizi — parametre değiştir, tahmin al."""
-    if "xgboost" not in loaded_models:
+    """Senaryo analizi — parametre değiştir, tahmin al (lazy-load)."""
+    if "xgboost" not in get_available_models():
         raise HTTPException(503, "XGBoost modeli yüklenmemiş.")
 
-    prediction = xgboost_model.predict_scenario(
-        hour=req.hour,
-        day_of_week=req.day_of_week,
-        weather_temp=req.temp,
-        is_holiday=req.is_holiday,
-    )
+    with load_model("xgboost") as model:
+        prediction = model.predict_scenario(
+            hour=req.hour,
+            day_of_week=req.day_of_week,
+            weather_temp=req.temp,
+            is_holiday=req.is_holiday,
+        )
     return {"prediction": round(prediction, 2)}

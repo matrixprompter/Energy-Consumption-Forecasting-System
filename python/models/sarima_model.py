@@ -3,7 +3,7 @@ P2-205: SARIMA Modeli
 SARIMAX + auto_arima parametreleri, son 2000 nokta (hız için)
 """
 
-import pickle
+import joblib
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +16,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 class SARIMAForecaster:
     """SARIMA zaman serisi tahmin modeli."""
 
-    MAX_POINTS = 2000  # Hız için son 2000 nokta
+    MAX_POINTS = 336  # Son 14 gün (336 saat) — .pkl boyutunu küçük tutar
 
     def __init__(self):
         self.model = None
@@ -38,7 +38,7 @@ class SARIMAForecaster:
             Eğitim metrikleri
         """
         series = df.set_index("timestamp")["consumption_mwh"].asfreq("h")
-        series = series.fillna(method="ffill")
+        series = series.ffill()
 
         # Son N noktayı al (hız için)
         series = series.tail(self.MAX_POINTS)
@@ -163,22 +163,24 @@ class SARIMAForecaster:
         return metrics, y_pred.tolist()
 
     def _save_model(self):
+        """Modeli .pkl olarak kaydeder (joblib — lazy-load uyumlu)."""
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.model_path, "wb") as f:
-            pickle.dump(
-                {
-                    "model": self.model,
-                    "order": self.order,
-                    "seasonal_order": self.seasonal_order,
-                },
-                f,
-            )
+        # Sadece gerekli parçaları kaydet (tüm sınıf 900MB+ olur)
+        joblib.dump(
+            {
+                "params": self.model.params,
+                "order": self.order,
+                "seasonal_order": self.seasonal_order,
+                "model_results": self.model,
+            },
+            self.model_path,
+            compress=3,  # zlib sıkıştırma
+        )
 
     def _load_model(self):
         if not self.model_path.exists():
             raise FileNotFoundError(f"SARIMA model bulunamadı: {self.model_path}")
-        with open(self.model_path, "rb") as f:
-            data = pickle.load(f)
-            self.model = data["model"]
-            self.order = data["order"]
-            self.seasonal_order = data["seasonal_order"]
+        data = joblib.load(self.model_path)
+        self.model = data["model_results"]
+        self.order = data["order"]
+        self.seasonal_order = data["seasonal_order"]

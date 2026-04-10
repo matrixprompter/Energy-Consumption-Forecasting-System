@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Select } from "@/components/ui/select";
 import { KPICards } from "@/components/KPICards";
 import { HeatmapChart } from "@/components/HeatmapChart";
@@ -29,7 +29,9 @@ const MODEL_OPTIONS = [
   { value: "sarima", label: "SARIMA" },
 ];
 
-// Seeded random — aynı seed = aynı sayılar (hydration güvenli)
+// ---------------------------------------------------------------------------
+// Demo veri üreteçleri (API yokken fallback)
+// ---------------------------------------------------------------------------
 function seededRandom(seed: number) {
   let s = seed;
   return () => {
@@ -115,10 +117,96 @@ const DEMO_FEATURES = [
   { name: "Haftalık Std Sapma", feature: "rolling_std_168h", shap_value: 250 },
 ];
 
-interface DemoData {
-  timeline: ReturnType<typeof generateDemoTimeline>;
-  heatmap: number[][];
-  tableRows: ReturnType<typeof generateDemoTableRows>;
+// ---------------------------------------------------------------------------
+// Gerçek veri dönüştürücüleri
+// ---------------------------------------------------------------------------
+
+interface EnergyReading {
+  timestamp: string;
+  consumption_mwh: number;
+  day_of_week: number;
+}
+
+function sortReadings(readings: EnergyReading[]) {
+  return [...readings].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+}
+
+function buildTimelineFromReadings(
+  sorted: EnergyReading[],
+  forecastPreds: Array<{ value: number; lower: number; upper: number }>,
+) {
+  const labels = sorted.map((r) => r.timestamp);
+  const actual = sorted.map((r) => r.consumption_mwh);
+
+  const predicted: number[] = [];
+  const lower: number[] = [];
+  const upper: number[] = [];
+
+  const forecastLen = forecastPreds.length;
+  const padLen = Math.max(0, sorted.length - forecastLen);
+
+  for (let i = 0; i < padLen; i++) {
+    predicted.push(actual[i]);
+    lower.push(actual[i]);
+    upper.push(actual[i]);
+  }
+  for (const p of forecastPreds) {
+    predicted.push(p.value);
+    lower.push(p.lower);
+    upper.push(p.upper);
+  }
+
+  return { labels, actual, predicted, lower, upper };
+}
+
+function buildHeatmapFromReadings(readings: EnergyReading[]): number[][] {
+  const grid: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
+  const counts: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
+
+  for (const r of readings) {
+    const d = new Date(r.timestamp);
+    const dow = r.day_of_week;
+    const hour = d.getHours();
+    if (dow >= 0 && dow < 7 && hour >= 0 && hour < 24) {
+      grid[dow][hour] += r.consumption_mwh;
+      counts[dow][hour] += 1;
+    }
+  }
+
+  return grid.map((row, d) =>
+    row.map((val, h) => (counts[d][h] > 0 ? Math.round(val / counts[d][h]) : 0))
+  );
+}
+
+function buildTableRows(
+  sorted: EnergyReading[],
+  allPreds: { prophet: number[]; xgboost: number[]; sarima: number[] },
+) {
+  const last24 = sorted.slice(-24);
+
+  return last24.map((r, i) => {
+    const d = new Date(r.timestamp);
+    return {
+      hour: `${String(d.getHours()).padStart(2, "0")}:00`,
+      actual: Math.round(r.consumption_mwh),
+      prophet: Math.round(allPreds.prophet[i] ?? r.consumption_mwh),
+      xgboost: Math.round(allPreds.xgboost[i] ?? r.consumption_mwh),
+      sarima: Math.round(allPreds.sarima[i] ?? r.consumption_mwh),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+interface TimelineData {
+  labels: string[];
+  actual: number[];
+  predicted: number[];
+  lower: number[];
+  upper: number[];
 }
 
 export default function DashboardPage() {
@@ -128,25 +216,37 @@ export default function DashboardPage() {
   const [comparison, setComparison] = useState(DEMO_METRICS);
   const [features, setFeatures] = useState(DEMO_FEATURES);
   const [winner, setWinner] = useState("xgboost");
-  const [demoData, setDemoData] = useState<DemoData | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  const [timeline, setTimeline] = useState<TimelineData | null>(null);
+  const [heatmap, setHeatmap] = useState<number[][] | null>(null);
+  const [tableRows, setTableRows] = useState<Array<{
+    hour: string; actual: number; prophet: number; xgboost: number; sarima: number;
+  }> | null>(null);
+
+  // Cache — enerji verisi period bazlı, tahminler ayrı
+  const readingsRef = useRef<{ periodKey: string; sorted: EnergyReading[] }>({ periodKey: "", sorted: [] });
+  const tablePredsRef = useRef<{ prophet: number[]; xgboost: number[]; sarima: number[] }>({
+    prophet: [], xgboost: [], sarima: [],
+  });
+  // readingsVersion: useEffect #2 veriyi yükleyince artırılır, useEffect #3'ü tetikler
+  const [readingsVersion, setReadingsVersion] = useState(0);
 
   const periodDays = period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : 365;
 
-  // Demo veriler sadece client-side üretilir (hydration sorunu yok)
+  // ── 1) Başlangıç: ML API kontrol + karşılaştırma + SHAP ──
   useEffect(() => {
-    setDemoData({
-      timeline: generateDemoTimeline(periodDays > 30 ? 30 : periodDays),
-      heatmap: generateDemoHeatmap(),
-      tableRows: generateDemoTableRows(24),
-    });
-  }, [periodDays]);
-
-  const checkApi = useCallback(async () => {
-    try {
-      const res = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(3000) });
-      if (res.ok) {
+    async function checkML() {
+      try {
+        const res = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) { setApiAvailable(false); return; }
         setApiAvailable(true);
-        const compRes = await fetch(`${ML_API}/model-comparison`);
+
+        const [compRes, shapRes] = await Promise.all([
+          fetch(`${ML_API}/model-comparison`),
+          fetch(`${ML_API}/feature-importance`),
+        ]);
+
         if (compRes.ok) {
           const data = await compRes.json();
           setComparison({
@@ -156,22 +256,142 @@ export default function DashboardPage() {
           });
           setWinner(data.winner || "xgboost");
         }
-        const shapRes = await fetch(`${ML_API}/feature-importance`);
+
         if (shapRes.ok) {
           const shapData = await shapRes.json();
           if (shapData.features?.length > 0) setFeatures(shapData.features);
         }
+      } catch {
+        setApiAvailable(false);
       }
-    } catch {
-      setApiAvailable(false);
     }
+    checkML();
   }, []);
 
+  // ── 2) Period değiştiğinde → enerji verisi + heatmap + tablo tahminleri ──
   useEffect(() => {
-    checkApi();
-  }, [checkApi]);
+    let cancelled = false;
+    const periodKey = `${periodDays}`;
 
-  if (!demoData) {
+    async function loadPeriodData() {
+      // Cache kontrolü
+      if (readingsRef.current.periodKey === periodKey && readingsRef.current.sorted.length > 0) {
+        return readingsRef.current.sorted;
+      }
+
+      try {
+        const now = new Date();
+        const from = new Date(now.getTime() - periodDays * 24 * 3600000);
+        const res = await fetch(
+          `/api/energy?from=${from.toISOString()}&to=${now.toISOString()}&limit=${periodDays * 24}`
+        );
+        if (!res.ok) return [];
+        const data = await res.json();
+        const readings: EnergyReading[] = data.data || [];
+        const sorted = sortReadings(readings);
+
+        if (!cancelled) {
+          readingsRef.current = { periodKey, sorted };
+          setReadingsVersion((v) => v + 1);
+        }
+        return sorted;
+      } catch {
+        return [];
+      }
+    }
+
+    async function load() {
+      const sorted = await loadPeriodData();
+      if (cancelled) return;
+
+      if (sorted.length === 0) {
+        // Demo fallback
+        const cappedDays = periodDays > 30 ? 30 : periodDays;
+        setTimeline(generateDemoTimeline(cappedDays));
+        setHeatmap(generateDemoHeatmap());
+        setTableRows(generateDemoTableRows(24));
+        setInitialLoading(false);
+        return;
+      }
+
+      // Heatmap (model bağımsız)
+      setHeatmap(buildHeatmapFromReadings(sorted));
+
+      // 3 model tahminini paralel çek (tablo için)
+      try {
+        const [pRes, xRes, sRes] = await Promise.all([
+          fetch(`${ML_API}/forecast`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "prophet", horizon: 24, region: "TR" }),
+          }),
+          fetch(`${ML_API}/forecast`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "xgboost", horizon: 24, region: "TR" }),
+          }),
+          fetch(`${ML_API}/forecast`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "sarima", horizon: 24, region: "TR" }),
+          }),
+        ]);
+
+        const preds = { prophet: [] as number[], xgboost: [] as number[], sarima: [] as number[] };
+        if (pRes.ok) preds.prophet = (await pRes.json()).predictions.map((p: { value: number }) => p.value);
+        if (xRes.ok) preds.xgboost = (await xRes.json()).predictions.map((p: { value: number }) => p.value);
+        if (sRes.ok) preds.sarima = (await sRes.json()).predictions.map((p: { value: number }) => p.value);
+
+        if (!cancelled) {
+          tablePredsRef.current = preds;
+          setTableRows(buildTableRows(sorted, preds));
+        }
+      } catch {
+        if (!cancelled) {
+          setTableRows(buildTableRows(sorted, { prophet: [], xgboost: [], sarima: [] }));
+        }
+      }
+
+      setInitialLoading(false);
+    }
+
+    load();
+    return () => { cancelled = true; };
+  }, [periodDays]);
+
+  // ── 3) Model değiştiğinde → sadece tahmin grafiği güncellenir ──
+  useEffect(() => {
+    const sorted = readingsRef.current.sorted;
+    if (sorted.length === 0) return;
+
+    let cancelled = false;
+
+    async function updateForecast() {
+      let forecastPreds: Array<{ value: number; lower: number; upper: number }> = [];
+      try {
+        const horizon = Math.min(sorted.length, 168);
+        const fRes = await fetch(`${ML_API}/forecast`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model, horizon, region: "TR" }),
+        });
+        if (fRes.ok) {
+          forecastPreds = (await fRes.json()).predictions || [];
+        }
+      } catch { /* grafik gerçek veriyi gösterir */ }
+
+      if (!cancelled) {
+        setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
+      }
+    }
+
+    updateForecast();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, periodDays, readingsVersion]);
+
+  // İlk yükleme
+  if (initialLoading && !timeline) {
     return (
       <div className="flex h-64 items-center justify-center text-muted-foreground">
         Yükleniyor...
@@ -179,14 +399,67 @@ export default function DashboardPage() {
     );
   }
 
-  const { timeline, heatmap, tableRows } = demoData;
+  // Son 24 saat tablosundan model metriklerini hesapla
+  const tableMetrics = tableRows
+    ? (() => {
+        function computeModelMetrics(
+          rows: Array<{ actual: number; prophet: number; xgboost: number; sarima: number }>,
+          modelKey: "prophet" | "xgboost" | "sarima",
+        ) {
+          const n = rows.length;
+          if (n === 0) return { mape: 0, rmse: 0, mae: 0, r2: 0 };
+          let sumAbsPctErr = 0;
+          let sumSqErr = 0;
+          let sumAbsErr = 0;
+          let sumActual = 0;
+          let sumSqTot = 0;
 
-  const avgConsumption = timeline.actual.reduce((a, b) => a + b, 0) / timeline.actual.length;
+          for (const r of rows) {
+            sumActual += r.actual;
+          }
+          const meanActual = sumActual / n;
+
+          for (const r of rows) {
+            const pred = r[modelKey];
+            const err = r.actual - pred;
+            sumAbsPctErr += Math.abs(err / r.actual);
+            sumSqErr += err * err;
+            sumAbsErr += Math.abs(err);
+            sumSqTot += (r.actual - meanActual) ** 2;
+          }
+
+          return {
+            mape: Math.round((sumAbsPctErr / n) * 10000) / 100,
+            rmse: Math.round(Math.sqrt(sumSqErr / n) * 100) / 100,
+            mae: Math.round((sumAbsErr / n) * 100) / 100,
+            r2: sumSqTot !== 0 ? Math.round((1 - sumSqErr / sumSqTot) * 10000) / 10000 : 0,
+          };
+        }
+
+        const p = computeModelMetrics(tableRows, "prophet");
+        const x = computeModelMetrics(tableRows, "xgboost");
+        const s = computeModelMetrics(tableRows, "sarima");
+        const minMape = Math.min(p.mape, x.mape, s.mape);
+        const w = p.mape === minMape ? "prophet" : x.mape === minMape ? "xgboost" : "sarima";
+        return { prophet: p, xgboost: x, sarima: s, winner: w };
+      })()
+    : null;
+
+  // Henüz veriler gelmediyse demo ile doldur
+  const tl = timeline ?? generateDemoTimeline(7);
+  const hm = heatmap ?? generateDemoHeatmap();
+  const tr = tableRows ?? generateDemoTableRows(24);
+
+  const avgConsumption = tl.actual.reduce((a, b) => a + b, 0) / tl.actual.length;
   const hourlyTotals = Array.from({ length: 24 }, (_, h) =>
-    timeline.actual.filter((_, i) => i % 24 === h).reduce((a, b) => a + b, 0)
+    tl.actual.filter((_, i) => i % 24 === h).reduce((a, b) => a + b, 0)
   );
   const peakHour = hourlyTotals.indexOf(Math.max(...hourlyTotals));
   const bestMape = Math.min(comparison.prophet.mape, comparison.xgboost.mape, comparison.sarima.mape);
+  const kpiWinner = tableMetrics ? tableMetrics.winner : winner;
+  const kpiBestMape = tableMetrics
+    ? Math.min(tableMetrics.prophet.mape, tableMetrics.xgboost.mape, tableMetrics.sarima.mape)
+    : bestMape;
 
   return (
     <div id="dashboard-content" className="space-y-4 overflow-hidden sm:space-y-6">
@@ -201,23 +474,28 @@ export default function DashboardPage() {
             Demo modu — ML API bağlı değil
           </span>
         )}
+        {apiAvailable && (
+          <span className="self-start rounded-md bg-green-100 px-3 py-1 text-xs text-green-800 dark:bg-green-900/30 dark:text-green-300">
+            Canlı veri — EPİAŞ + ML API bağlı
+          </span>
+        )}
       </div>
 
       {/* KPI Kartları */}
       <KPICards
         avgConsumption={avgConsumption}
         peakHour={peakHour}
-        bestAccuracy={bestMape}
-        bestModel={winner}
+        bestAccuracy={kpiBestMape}
+        bestModel={kpiWinner}
       />
 
       {/* Ana Tahmin Grafiği */}
       <ForecastChart
-        labels={timeline.labels}
-        actual={timeline.actual}
-        predicted={timeline.predicted}
-        lower={timeline.lower}
-        upper={timeline.upper}
+        labels={tl.labels}
+        actual={tl.actual}
+        predicted={tl.predicted}
+        lower={tl.lower}
+        upper={tl.upper}
         modelName={model}
       />
 
@@ -228,24 +506,25 @@ export default function DashboardPage() {
           xgboost={comparison.xgboost}
           sarima={comparison.sarima}
           winner={winner}
+          tableMetrics={tableMetrics}
         />
         <FeatureImportance features={features} />
       </div>
 
       {/* Isı Haritası */}
-      <HeatmapChart data={heatmap} />
+      <HeatmapChart data={hm} />
 
       {/* Senaryo + Export */}
       <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
         <ScenarioAnalysis />
         <ExportPanel
-          forecastData={tableRows}
+          forecastData={tr}
           modelMetrics={comparison}
         />
       </div>
 
       {/* Tahmin Tablosu */}
-      <ForecastTable rows={tableRows} />
+      <ForecastTable rows={tr} />
     </div>
   );
 }

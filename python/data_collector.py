@@ -1,6 +1,6 @@
 """
 P2-201: Veri Toplama Scripti
-EPİAŞ API → saatlik tüketim
+EPİAŞ Şeffaflık 2.0 (eptr2) → saatlik tüketim
 Open-Meteo API → saatlik hava sıcaklığı
 holidays paketi → TR tatil günleri
 Supabase → energy_readings tablosuna kaydet
@@ -13,11 +13,13 @@ import holidays
 import numpy as np
 import pandas as pd
 import requests
+from eptr2 import EPTR2
 from supabase import create_client
 
 from config import (
     DEFAULT_REGION,
-    EPIAS_BASE_URL,
+    EPIAS_USERNAME,
+    EPIAS_PASSWORD,
     OPEN_METEO_URL,
     SUPABASE_SERVICE_KEY,
     SUPABASE_URL,
@@ -33,44 +35,63 @@ tr_holidays = holidays.Turkey()
 
 
 # ---------------------------------------------------------------------------
-# EPİAŞ — Saatlik Gerçek Zamanlı Tüketim
+# EPİAŞ Şeffaflık 2.0 — Saatlik Gerçek Zamanlı Tüketim (eptr2)
 # ---------------------------------------------------------------------------
+def _get_eptr2_client() -> EPTR2:
+    """EPİAŞ Şeffaflık 2.0 istemcisi oluşturur."""
+    if not EPIAS_USERNAME or not EPIAS_PASSWORD:
+        raise ValueError(
+            "EPIAS_USERNAME ve EPIAS_PASSWORD environment variable'ları gerekli. "
+            ".env dosyasını kontrol edin."
+        )
+    return EPTR2(username=EPIAS_USERNAME, password=EPIAS_PASSWORD)
+
+
 def fetch_epias_consumption(
     start_date: str, end_date: str
 ) -> pd.DataFrame:
     """
-    EPİAŞ API'den saatlik tüketim verisi çeker.
+    EPİAŞ Şeffaflık 2.0 API'den saatlik tüketim verisi çeker (eptr2).
 
     Args:
-        start_date: ISO format (ör: "2024-01-01T00:00:00")
-        end_date:   ISO format (ör: "2024-01-07T00:00:00")
+        start_date: ISO format (ör: "2024-01-01T00:00:00") veya "2024-01-01"
+        end_date:   ISO format (ör: "2024-01-07T00:00:00") veya "2024-01-07"
 
     Returns:
         DataFrame: timestamp (UTC+3), consumption_mwh
     """
-    url = f"{EPIAS_BASE_URL}/consumption/real-time-consumption"
-    params = {"startDate": start_date, "endDate": end_date}
+    eptr = _get_eptr2_client()
 
-    resp = requests.get(url, params=params, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
+    # eptr2 tarih formatı: "YYYY-MM-DD"
+    start_str = start_date[:10]
+    end_str = end_date[:10]
 
-    items = data.get("body", {}).get("hourlyConsumptions", [])
-    if not items:
-        print(f"EPİAŞ: {start_date} — {end_date} arası veri bulunamadı.")
+    try:
+        result = eptr.call("rt-cons", start_date=start_str, end_date=end_str)
+    except Exception as e:
+        print(f"EPİAŞ API hatası: {e}")
         return pd.DataFrame()
 
-    rows = []
-    for item in items:
-        ts = pd.to_datetime(item["date"], utc=True).tz_convert("Europe/Istanbul")
-        rows.append(
-            {
-                "timestamp": ts,
-                "consumption_mwh": float(item.get("consumption", 0)),
-            }
-        )
+    if result is None or (isinstance(result, pd.DataFrame) and result.empty):
+        print(f"EPİAŞ: {start_str} — {end_str} arası veri bulunamadı.")
+        return pd.DataFrame()
 
-    df = pd.DataFrame(rows)
+    # eptr2 DataFrame döndürür — kolonlar: date, time, consumption
+    df = result if isinstance(result, pd.DataFrame) else pd.DataFrame(result)
+
+    date_col = "date"
+    cons_col = "consumption"
+
+    df = df.rename(columns={date_col: "timestamp", cons_col: "consumption_mwh"})
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    if df["timestamp"].dt.tz is None:
+        df["timestamp"] = df["timestamp"].dt.tz_localize("Europe/Istanbul")
+    else:
+        df["timestamp"] = df["timestamp"].dt.tz_convert("Europe/Istanbul")
+
+    df["consumption_mwh"] = pd.to_numeric(df["consumption_mwh"], errors="coerce")
+    df = df[["timestamp", "consumption_mwh"]].dropna()
     df = df.sort_values("timestamp").reset_index(drop=True)
     return df
 

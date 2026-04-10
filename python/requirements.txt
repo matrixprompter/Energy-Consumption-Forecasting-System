@@ -21,6 +21,10 @@ shap==0.46.0
 # Data Sources
 requests==2.32.3
 holidays==0.69
+eptr2
+
+# Model Serialization
+joblib==1.4.2
 
 # Visualization
 matplotlib==3.10.1
