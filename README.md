@@ -105,7 +105,6 @@ A full-stack machine learning project that forecasts hourly energy consumption f
 │   │   └── 004_rls_and_indexes.sql
 │   ├── seed.sql
 │   └── run_migrations.sh
-├── project-plan/                       # Project plan document
 ├── vercel.json                         # Cron job configuration
 ├── .env.local.example                  # Environment variables template
 ├── LICENSE                             # MIT License
