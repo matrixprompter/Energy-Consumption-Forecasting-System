@@ -26,9 +26,16 @@ from config import (
 )
 
 # ---------------------------------------------------------------------------
-# Supabase client
+# Supabase client (lazy — env var'lar deploy'da boş olabilir)
 # ---------------------------------------------------------------------------
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+_supabase = None
+
+
+def get_supabase():
+    global _supabase
+    if _supabase is None:
+        _supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    return _supabase
 
 # Türkiye resmi tatilleri
 tr_holidays = holidays.Turkey()
@@ -193,7 +200,7 @@ def save_to_supabase(df: pd.DataFrame) -> int:
     total = 0
     for i in range(0, len(records), batch_size):
         batch = records[i : i + batch_size]
-        supabase.table("energy_readings").upsert(
+        get_supabase().table("energy_readings").upsert(
             batch, on_conflict="timestamp"
         ).execute()
         total += len(batch)

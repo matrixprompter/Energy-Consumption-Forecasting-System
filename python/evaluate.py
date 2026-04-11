@@ -17,7 +17,14 @@ from config import SUPABASE_SERVICE_KEY, SUPABASE_URL
 from supabase import create_client
 from feature_engineering import create_features, prepare_train_test
 
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+_supabase = None
+
+
+def get_supabase():
+    global _supabase
+    if _supabase is None:
+        _supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    return _supabase
 from models import ProphetForecaster, XGBoostForecaster
 
 OUTPUT_DIR = Path(__file__).parent / "output"
@@ -42,7 +49,7 @@ def load_data_from_supabase() -> pd.DataFrame:
 
     while True:
         response = (
-            supabase.table("energy_readings")
+            get_supabase().table("energy_readings")
             .select("*")
             .order("timestamp", desc=False)
             .range(offset, offset + batch_size - 1)
@@ -347,7 +354,7 @@ def save_comparisons_to_supabase(results: dict) -> None:
             "xgboost": period_data["xgboost"],
         }
 
-        supabase.table("model_comparisons").insert(
+        get_supabase().table("model_comparisons").insert(
             {
                 "prophet_mape": period_data["prophet"]["mape"],
                 "xgboost_mape": period_data["xgboost"]["mape"],
@@ -370,7 +377,7 @@ def save_forecasts_to_supabase(results: dict) -> None:
         period_data = results["periods"].get("7d") or next(iter(results["periods"].values()))
         metrics = period_data[model_name]
 
-        supabase.table("forecasts").insert(
+        get_supabase().table("forecasts").insert(
             {
                 "model_name": model_name,
                 "forecast_horizon": len(preds),

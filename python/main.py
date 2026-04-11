@@ -63,9 +63,16 @@ def load_model(model_name: str):
 
 
 # ---------------------------------------------------------------------------
-# Supabase client
+# Supabase client (lazy — deploy'da env var gecikmeli yüklenebilir)
 # ---------------------------------------------------------------------------
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+_supabase = None
+
+
+def get_supabase():
+    global _supabase
+    if _supabase is None:
+        _supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    return _supabase
 
 # ---------------------------------------------------------------------------
 # FastAPI
@@ -140,7 +147,7 @@ async def forecast(req: ForecastRequest) -> dict[str, Any]:
             else:
                 # XGBoost — son verilerden özellik üret, her adımda güncelle
                 response = (
-                    supabase.table("energy_readings")
+                    get_supabase().table("energy_readings")
                     .select("*")
                     .order("timestamp", desc=True)
                     .limit(200)
@@ -195,7 +202,7 @@ async def forecast(req: ForecastRequest) -> dict[str, Any]:
 
         # Son MAPE değerini al
         last_forecast = (
-            supabase.table("forecasts")
+            get_supabase().table("forecasts")
             .select("mape")
             .eq("model_name", req.model)
             .order("created_at", desc=True)
@@ -225,7 +232,7 @@ async def latest_forecast(
 ) -> dict[str, Any]:
     """En son tahmin sonuçlarını getirir."""
     response = (
-        supabase.table("forecasts")
+        get_supabase().table("forecasts")
         .select("*")
         .eq("model_name", model)
         .order("created_at", desc=True)
@@ -255,7 +262,7 @@ async def model_comparison(
 
     # Belirli periyot için en son karşılaştırmayı getir
     response = (
-        supabase.table("model_comparisons")
+        get_supabase().table("model_comparisons")
         .select("*")
         .eq("dataset_period", period)
         .order("run_at", desc=True)
@@ -266,7 +273,7 @@ async def model_comparison(
     if not response.data:
         # Fallback: periyot filtresi olmadan en son kaydı dene
         response = (
-            supabase.table("model_comparisons")
+            get_supabase().table("model_comparisons")
             .select("*")
             .order("run_at", desc=True)
             .limit(1)
@@ -311,7 +318,7 @@ async def model_comparison_all() -> dict[str, Any]:
 
     for p in periods:
         response = (
-            supabase.table("model_comparisons")
+            get_supabase().table("model_comparisons")
             .select("*")
             .eq("dataset_period", p)
             .order("run_at", desc=True)
@@ -354,7 +361,7 @@ async def feature_importance() -> dict[str, Any]:
         import pandas as pd
 
         response = (
-            supabase.table("energy_readings")
+            get_supabase().table("energy_readings")
             .select("*")
             .order("timestamp", desc=True)
             .limit(500)
