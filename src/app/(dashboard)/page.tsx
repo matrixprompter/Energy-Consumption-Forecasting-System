@@ -300,20 +300,60 @@ export default function DashboardPage() {
     }
   }, [dataRefreshing]);
 
-  // ── 1) Başlangıç: ML API durumunu kontrol et ──
+  // ── 1) Başlangıç: Supabase'den veri + ML API kontrol ──
   useEffect(() => {
     async function init() {
-      // ML API kontrol
+      // 1a) Supabase'den enerji verisi yükle
+      try {
+        const now = new Date();
+        const from = new Date(now.getTime() - 7 * 24 * 3600000);
+        const res = await fetch(
+          `/api/energy?from=${from.toISOString()}&to=${now.toISOString()}&limit=${7 * 24}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const readings: EnergyReading[] = data.data || [];
+          const sorted = sortReadings(readings);
+
+          if (sorted.length > 0) {
+            readingsRef.current = { periodKey: "7", sorted };
+            setHeatmap(buildHeatmapFromReadings(sorted));
+            setTimeline(buildTimelineFromReadings(sorted, []));
+            tableReadingsRef.current = { periodKey: "1", sorted: sorted.slice(-24) };
+            setTableRows(buildTableRows(sorted.slice(-24), { prophet: [], xgboost: [] }));
+            setDataLoaded(true);
+            setReadingsVersion((v) => v + 1);
+          }
+        }
+      } catch {
+        // Supabase'e erişilemezse boş kalır
+      }
+
+      // 1b) ML API kontrol + model karşılaştırma + SHAP
       try {
         const res = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(5000) });
         if (res.ok) {
           setApiAvailable(true);
+
+          const [compRes, shapRes] = await Promise.all([
+            fetch(`${ML_API}/model-comparison/all`),
+            fetch(`${ML_API}/feature-importance`),
+          ]);
+          if (compRes.ok) {
+            const data = await compRes.json();
+            if (Object.keys(data).length > 0) setPeriodData(data);
+          }
+          if (shapRes.ok) {
+            const shapData = await shapRes.json();
+            if (shapData.features?.length > 0) setFeatures(shapData.features);
+          }
         }
       } catch {
-        // API yoksa buton ile bağlanılacak
+        // ML API yoksa dashboard sadece gerçek veriyi gösterir
       }
     }
     init();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── 2) Period değiştiğinde → enerji verisi + heatmap ──
@@ -457,73 +497,7 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tablePeriod, tablePeriodDays, readingsVersion, dataLoaded]);
 
-  // ── Boş durum: Henüz veri yüklenmedi ──
-  if (!dataLoaded && !dataRefreshing) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-6 py-20">
-        <div className="text-center space-y-3">
-          <div className="text-4xl">⚡</div>
-          <h2 className="text-xl font-semibold">Enerji Tahmin Dashboard</h2>
-          <p className="text-muted-foreground text-sm max-w-md">
-            Dashboard&apos;ı kullanmak için önce EPİAŞ&apos;tan enerji verilerini çekmeniz gerekiyor.
-            Aşağıdaki butona tıklayarak son 7 günün verilerini yükleyin.
-          </p>
-        </div>
-        <Button
-          size="lg"
-          onClick={handleRefreshData}
-          disabled={dataRefreshing}
-        >
-          Verileri Çek ve Başla
-        </Button>
-        {apiAvailable && (
-          <span className="rounded-md bg-green-100 px-3 py-1 text-xs text-green-800 dark:bg-green-900/30 dark:text-green-300">
-            ML API bağlı
-          </span>
-        )}
-      </div>
-    );
-  }
-
-  // ── Veri çekiliyor durumu ──
-  if (dataRefreshing) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-6 py-20">
-        <div className="text-center space-y-4">
-          <div className="text-4xl animate-pulse">⚡</div>
-          <h2 className="text-xl font-semibold">Veriler Yükleniyor</h2>
-          <div className="space-y-2 min-w-[320px]">
-            {REFRESH_STEPS.map((step, i) => {
-              const currentIdx = refreshStep ? REFRESH_STEPS.indexOf(refreshStep) : -1;
-              const isDone = currentIdx > i;
-              const isActive = currentIdx === i;
-              const isPending = currentIdx < i;
-
-              return (
-                <div
-                  key={i}
-                  className={`flex items-center gap-3 rounded-lg px-4 py-2 text-sm transition-all ${
-                    isActive
-                      ? "bg-primary/10 text-primary font-medium"
-                      : isDone
-                        ? "text-green-600 dark:text-green-400"
-                        : isPending
-                          ? "text-muted-foreground/50"
-                          : ""
-                  }`}
-                >
-                  <span className="w-5 text-center">
-                    {isDone ? "✓" : isActive ? "●" : "○"}
-                  </span>
-                  <span>{step}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // ── Veri çekiliyor durumu (overlay) ──
 
   // ── Veriler yüklendi — metrikler hesapla ──
   const tableMetrics = tableRows && tableRows.length > 0
@@ -618,12 +592,25 @@ export default function DashboardPage() {
             {refreshMsg}
           </span>
         )}
-        {apiAvailable && (
+        {apiAvailable && !dataRefreshing && (
           <span className="self-start rounded-md bg-green-100 px-3 py-1 text-xs text-green-800 dark:bg-green-900/30 dark:text-green-300">
             EPİAŞ + ML API bağlı
           </span>
         )}
       </div>
+
+      {/* Progress banner — veri çekilirken */}
+      {dataRefreshing && refreshStep && (
+        <div className="rounded-lg border bg-card p-4">
+          <div className="flex items-center gap-3">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <span className="text-sm font-medium">{refreshStep}</span>
+            <span className="ml-auto text-xs text-muted-foreground">
+              {REFRESH_STEPS.indexOf(refreshStep) + 1}/{REFRESH_STEPS.length}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* KPI Kartları */}
       <KPICards
