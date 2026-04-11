@@ -10,21 +10,36 @@ export async function GET(request: NextRequest) {
 
   const supabase = createAdminClient();
 
-  let query = supabase
-    .from("energy_readings")
-    .select("*", { count: "exact" })
-    .eq("region", region)
-    .order("timestamp", { ascending: false })
-    .limit(limit);
+  // Supabase max 1000 rows per query — paginate for larger requests
+  const allData: unknown[] = [];
+  const batchSize = 1000;
+  let offset = 0;
 
-  if (from) query = query.gte("timestamp", from);
-  if (to) query = query.lte("timestamp", to);
+  while (allData.length < limit) {
+    const currentBatch = Math.min(batchSize, limit - allData.length);
+    let query = supabase
+      .from("energy_readings")
+      .select("*")
+      .eq("region", region)
+      .order("timestamp", { ascending: false })
+      .range(offset, offset + currentBatch - 1);
 
-  const { data, error, count } = await query;
+    if (from) query = query.gte("timestamp", from);
+    if (to) query = query.lte("timestamp", to);
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const { data, error } = await query;
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    if (!data || data.length === 0) break;
+
+    allData.push(...data);
+    offset += data.length;
+
+    if (data.length < currentBatch) break;
   }
 
-  return NextResponse.json({ data, total: count });
+  return NextResponse.json({ data: allData, total: allData.length });
 }

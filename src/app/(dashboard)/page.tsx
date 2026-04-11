@@ -142,7 +142,7 @@ export default function DashboardPage() {
   const [mlLoading, setMlLoading] = useState(false);
   const [mlStep, setMlStep] = useState<string | null>(null);
   const [mlError, setMlError] = useState<string | null>(null);
-  const [mlLoaded, setMlLoaded] = useState(false);
+  const [shapLoaded, setShapLoaded] = useState(false);
 
   const [timeline, setTimeline] = useState<TimelineData | null>(null);
   const [heatmap, setHeatmap] = useState<number[][] | null>(null);
@@ -223,7 +223,7 @@ export default function DashboardPage() {
         }
       } catch { /* opsiyonel */ }
 
-      setMlLoaded(true);
+      setShapLoaded(true);
       setReadingsVersion((v) => v + 1);
     } catch {
       setMlError("ML API bağlantı hatası — sunucu başlatılamamış olabilir");
@@ -299,8 +299,6 @@ export default function DashboardPage() {
               }));
               setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
             }
-
-            setMlLoaded(true);
           }
         }
       } catch { /* opsiyonel */ }
@@ -489,7 +487,7 @@ export default function DashboardPage() {
         <Select options={PERIOD_OPTIONS} value={period} onChange={(e) => setPeriod(e.target.value)} />
         <Select options={MODEL_OPTIONS} value={model} onChange={(e) => setModel(e.target.value)} />
 
-        {!mlLoaded && (
+        {!shapLoaded && (
           <Button
             size="sm"
             onClick={handleLoadML}
@@ -500,9 +498,9 @@ export default function DashboardPage() {
           </Button>
         )}
 
-        {mlLoaded && (
+        {shapLoaded && (
           <span className="self-start rounded-md bg-green-100 px-3 py-1 text-xs text-green-800 dark:bg-green-900/30 dark:text-green-300">
-            Tahminler yüklendi
+            ML API bağlı
           </span>
         )}
       </div>
