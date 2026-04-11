@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { KPICards } from "@/components/KPICards";
 import { HeatmapChart } from "@/components/HeatmapChart";
 import { ScenarioAnalysis } from "@/components/ScenarioAnalysis";
@@ -614,7 +615,7 @@ export default function DashboardPage() {
       />
 
       {/* Ana Tahmin Grafiği */}
-      {tl && (
+      {tl ? (
         <ForecastChart
           labels={tl.labels}
           actual={tl.actual}
@@ -623,6 +624,13 @@ export default function DashboardPage() {
           upper={tl.upper}
           modelName={model}
         />
+      ) : (
+        <Card>
+          <CardHeader><CardTitle className="text-base sm:text-lg">Enerji Tüketim Tahmini</CardTitle></CardHeader>
+          <CardContent className="flex h-48 items-center justify-center text-muted-foreground text-sm">
+            Tahmin grafiği için verileri güncelleyin
+          </CardContent>
+        </Card>
       )}
 
       {/* Model Karşılaştırma + Özellik Önemi */}
@@ -635,7 +643,16 @@ export default function DashboardPage() {
       </div>
 
       {/* Isı Haritası */}
-      {hm && <HeatmapChart data={hm} />}
+      {hm ? (
+        <HeatmapChart data={hm} />
+      ) : (
+        <Card>
+          <CardHeader><CardTitle className="text-base sm:text-lg">Saatlik Tüketim Isı Haritası</CardTitle></CardHeader>
+          <CardContent className="flex h-48 items-center justify-center text-muted-foreground text-sm">
+            Isı haritası için verileri güncelleyin
+          </CardContent>
+        </Card>
+      )}
 
       {/* Senaryo + Export */}
       <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
@@ -651,8 +668,15 @@ export default function DashboardPage() {
       </div>
 
       {/* Tahmin Tablosu */}
-      {tr.length > 0 && (
+      {tr.length > 0 ? (
         <ForecastTable rows={tr} period={tablePeriod} onPeriodChange={setTablePeriod} />
+      ) : (
+        <Card>
+          <CardHeader><CardTitle className="text-base sm:text-lg">Tahmin Veri Tablosu</CardTitle></CardHeader>
+          <CardContent className="flex h-48 items-center justify-center text-muted-foreground text-sm">
+            Tablo verileri için verileri güncelleyin
+          </CardContent>
+        </Card>
       )}
     </div>
   );
