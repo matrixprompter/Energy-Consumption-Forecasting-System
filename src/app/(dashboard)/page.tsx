@@ -116,16 +116,14 @@ function buildTableRows(
 }
 
 // ---------------------------------------------------------------------------
-// Progress mesajları
+// ML API tahmin adımları
 // ---------------------------------------------------------------------------
-const REFRESH_STEPS = [
-  "ML API sunucusuna bağlanılıyor...",
-  "EPİAŞ'tan enerji verileri çekiliyor...",
-  "Günlük tüketim verileri işleniyor...",
-  "Saatlik veriler Supabase'e kaydediliyor...",
-  "Model karşılaştırma verileri yükleniyor...",
-  "SHAP özellik analizi alınıyor...",
-  "Dashboard güncelleniyor...",
+const ML_STEPS = [
+  "ML API sunucusu başlatılıyor...",
+  "Prophet ve XGBoost modelleri yükleniyor...",
+  "Tahminler oluşturuluyor...",
+  "Model karşılaştırma verileri alınıyor...",
+  "SHAP özellik analizi hesaplanıyor...",
 ];
 
 // ---------------------------------------------------------------------------
@@ -148,13 +146,15 @@ type PeriodComparison = {
 export default function DashboardPage() {
   const [period, setPeriod] = useState("live24h");
   const [model, setModel] = useState("xgboost");
-  const [apiAvailable, setApiAvailable] = useState(false);
+  const [mlLoaded, setMlLoaded] = useState(false);
+  const [mlLoading, setMlLoading] = useState(false);
+  const [mlStep, setMlStep] = useState<string | null>(null);
+  const [mlError, setMlError] = useState<string | null>(null);
   const [periodData, setPeriodData] = useState<Record<string, PeriodComparison>>({});
   const [features, setFeatures] = useState<Array<{ name: string; feature: string; shap_value: number }>>([]);
   const [dataLoaded, setDataLoaded] = useState(false);
 
   const [dataRefreshing, setDataRefreshing] = useState(false);
-  const [refreshStep, setRefreshStep] = useState<string | null>(null);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<TimelineData | null>(null);
   const [heatmap, setHeatmap] = useState<number[][] | null>(null);
@@ -174,26 +174,107 @@ export default function DashboardPage() {
   const periodDays = period === "live24h" ? 1 : period === "1d" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : period === "180d" ? 180 : 365;
   const tablePeriodDays = tablePeriod === "live24h" ? 1 : tablePeriod === "1d" ? 1 : tablePeriod === "7d" ? 7 : tablePeriod === "30d" ? 30 : tablePeriod === "90d" ? 90 : tablePeriod === "180d" ? 180 : 365;
 
-  // ── Verileri Güncelle butonu ──
+  // ── Tahminleri Al butonu — ML API başlat + tahmin yükle ──
+  const handleLoadML = useCallback(async () => {
+    if (mlLoading) return;
+    setMlLoading(true);
+    setMlError(null);
+
+    try {
+      // Adım 1: ML API'yi başlat (Render cold start ~10sn)
+      setMlStep(ML_STEPS[0]);
+      const healthRes = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(30000) });
+      if (!healthRes.ok) {
+        setMlError("ML API sunucusuna ulaşılamıyor");
+        setMlLoading(false);
+        setMlStep(null);
+        return;
+      }
+
+      // Adım 2: Tahminleri çek
+      setMlStep(ML_STEPS[1]);
+      await new Promise((r) => setTimeout(r, 800));
+
+      setMlStep(ML_STEPS[2]);
+      const sorted = readingsRef.current.sorted;
+      let preds = { prophet: [] as number[], xgboost: [] as number[] };
+      let forecastPreds: Array<{ value: number; lower: number; upper: number }> = [];
+
+      try {
+        const [pRes, xRes, fRes] = await Promise.all([
+          fetch(`${ML_API}/forecast`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "prophet", horizon: 24, region: "TR" }),
+          }),
+          fetch(`${ML_API}/forecast`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: "xgboost", horizon: 24, region: "TR" }),
+          }),
+          fetch(`${ML_API}/forecast`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model, horizon: Math.min(sorted.length || 24, 168), region: "TR" }),
+          }),
+        ]);
+        if (pRes.ok) preds.prophet = (await pRes.json()).predictions.map((p: { value: number }) => p.value);
+        if (xRes.ok) preds.xgboost = (await xRes.json()).predictions.map((p: { value: number }) => p.value);
+        if (fRes.ok) forecastPreds = (await fRes.json()).predictions || [];
+      } catch { /* tahmin hatası — devam et */ }
+
+      tablePredsRef.current = preds;
+
+      // Timeline ve tablo güncelle
+      if (sorted.length > 0) {
+        setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
+        setTableRows(buildTableRows(sorted.slice(-tablePeriodDays * 24), preds));
+      }
+
+      // Adım 3: Model karşılaştırma
+      setMlStep(ML_STEPS[3]);
+      try {
+        const compRes = await fetch(`${ML_API}/model-comparison/all`);
+        if (compRes.ok) {
+          const data = await compRes.json();
+          if (Object.keys(data).length > 0) setPeriodData(data);
+        }
+      } catch { /* opsiyonel */ }
+
+      // Adım 4: SHAP
+      setMlStep(ML_STEPS[4]);
+      try {
+        const shapRes = await fetch(`${ML_API}/feature-importance`);
+        if (shapRes.ok) {
+          const shapData = await shapRes.json();
+          if (shapData.features?.length > 0) setFeatures(shapData.features);
+        }
+      } catch { /* opsiyonel */ }
+
+      setMlLoaded(true);
+      setReadingsVersion((v) => v + 1);
+    } catch {
+      setMlError("ML API bağlantı hatası");
+    } finally {
+      setMlLoading(false);
+      setMlStep(null);
+    }
+  }, [mlLoading, model, tablePeriodDays]);
+
+  // ── Verileri Güncelle butonu — EPİAŞ'tan taze veri çek ──
   const handleRefreshData = useCallback(async () => {
     if (dataRefreshing) return;
     setDataRefreshing(true);
-    setRefreshMsg(null);
+    setRefreshMsg("EPİAŞ'tan veriler çekiliyor...");
 
     try {
-      // Adım 1: API bağlantısı
-      setRefreshStep(REFRESH_STEPS[0]);
       const healthRes = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(10000) });
       if (!healthRes.ok) {
         setRefreshMsg("ML API sunucusuna ulaşılamıyor");
         setDataRefreshing(false);
-        setRefreshStep(null);
         return;
       }
-      setApiAvailable(true);
 
-      // Adım 2: EPİAŞ'tan veri çek
-      setRefreshStep(REFRESH_STEPS[1]);
       const now = new Date();
       const from = new Date(now.getTime() - 7 * 24 * 3600000);
       const updateRes = await fetch(`${ML_API}/update-data`, {
@@ -205,39 +286,13 @@ export default function DashboardPage() {
         }),
       });
 
-      // Adım 3: Günlük veriler
-      setRefreshStep(REFRESH_STEPS[2]);
       let rowCount = 0;
       if (updateRes.ok) {
         const updateData = await updateRes.json();
         rowCount = updateData.rows_inserted || 0;
       }
 
-      // Adım 4: Saatlik veriler
-      setRefreshStep(REFRESH_STEPS[3]);
-      // Küçük bir bekleme — kullanıcı adımları görsün
-      await new Promise((r) => setTimeout(r, 500));
-
-      // Adım 5: Model karşılaştırma
-      setRefreshStep(REFRESH_STEPS[4]);
-      const compRes = await fetch(`${ML_API}/model-comparison/all`);
-      if (compRes.ok) {
-        const data = await compRes.json();
-        if (Object.keys(data).length > 0) setPeriodData(data);
-      }
-
-      // Adım 6: SHAP analizi
-      setRefreshStep(REFRESH_STEPS[5]);
-      const shapRes = await fetch(`${ML_API}/feature-importance`);
-      if (shapRes.ok) {
-        const shapData = await shapRes.json();
-        if (shapData.features?.length > 0) setFeatures(shapData.features);
-      }
-
-      // Adım 7: Dashboard güncelle — tüm veriyi yükle
-      setRefreshStep(REFRESH_STEPS[6]);
-
-      // Enerji verisi çek (Supabase → Next.js API)
+      // Supabase'den güncel veriyi yükle
       const energyRes = await fetch(
         `/api/energy?from=${from.toISOString()}&to=${now.toISOString()}&limit=${7 * 24}`
       );
@@ -245,65 +300,29 @@ export default function DashboardPage() {
         const energyData = await energyRes.json();
         const readings: EnergyReading[] = energyData.data || [];
         const sorted = sortReadings(readings);
-
         if (sorted.length > 0) {
           readingsRef.current = { periodKey: "7", sorted };
           setHeatmap(buildHeatmapFromReadings(sorted));
-
-          // Tahminleri çek
-          let preds = { prophet: [] as number[], xgboost: [] as number[] };
-          try {
-            const [pRes, xRes] = await Promise.all([
-              fetch(`${ML_API}/forecast`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "prophet", horizon: 24, region: "TR" }),
-              }),
-              fetch(`${ML_API}/forecast`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: "xgboost", horizon: 24, region: "TR" }),
-              }),
-            ]);
-            if (pRes.ok) preds.prophet = (await pRes.json()).predictions.map((p: { value: number }) => p.value);
-            if (xRes.ok) preds.xgboost = (await xRes.json()).predictions.map((p: { value: number }) => p.value);
-          } catch { /* tahminler opsiyonel */ }
-
-          tablePredsRef.current = preds;
+          setTimeline(buildTimelineFromReadings(sorted, []));
           tableReadingsRef.current = { periodKey: "1", sorted: sorted.slice(-24) };
-
-          // Timeline (grafik)
-          let forecastPreds: Array<{ value: number; lower: number; upper: number }> = [];
-          try {
-            const fRes = await fetch(`${ML_API}/forecast`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ model, horizon: Math.min(sorted.length, 168), region: "TR" }),
-            });
-            if (fRes.ok) forecastPreds = (await fRes.json()).predictions || [];
-          } catch { /* grafik gerçek veriyi gösterir */ }
-
-          setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
-          setTableRows(buildTableRows(sorted.slice(-24), preds));
+          setTableRows(buildTableRows(sorted.slice(-24), tablePredsRef.current));
+          setDataLoaded(true);
+          setReadingsVersion((v) => v + 1);
         }
       }
 
-      setReadingsVersion((v) => v + 1);
-      setDataLoaded(true);
       setRefreshMsg(`${rowCount} satır güncellendi`);
     } catch {
-      setRefreshMsg("Bağlantı hatası — ML API çalışıyor mu?");
+      setRefreshMsg("Bağlantı hatası");
     } finally {
       setDataRefreshing(false);
-      setRefreshStep(null);
       setTimeout(() => setRefreshMsg(null), 8000);
     }
   }, [dataRefreshing]);
 
-  // ── 1) Başlangıç: Supabase'den veri + ML API kontrol ──
+  // ── 1) Başlangıç: Supabase'den enerji verisi yükle (ML API'ye dokunma) ──
   useEffect(() => {
     async function init() {
-      // 1a) Supabase'den enerji verisi yükle
       try {
         const now = new Date();
         const from = new Date(now.getTime() - 7 * 24 * 3600000);
@@ -328,42 +347,17 @@ export default function DashboardPage() {
       } catch {
         // Supabase'e erişilemezse boş kalır
       }
-
-      // 1b) ML API kontrol + model karşılaştırma + SHAP
-      try {
-        const res = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(5000) });
-        if (res.ok) {
-          setApiAvailable(true);
-
-          const [compRes, shapRes] = await Promise.all([
-            fetch(`${ML_API}/model-comparison/all`),
-            fetch(`${ML_API}/feature-importance`),
-          ]);
-          if (compRes.ok) {
-            const data = await compRes.json();
-            if (Object.keys(data).length > 0) setPeriodData(data);
-          }
-          if (shapRes.ok) {
-            const shapData = await shapRes.json();
-            if (shapData.features?.length > 0) setFeatures(shapData.features);
-          }
-        }
-      } catch {
-        // ML API yoksa dashboard sadece gerçek veriyi gösterir
-      }
     }
     init();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── 2) Period değiştiğinde → enerji verisi + heatmap ──
+  // ── 2) Period değiştiğinde → Supabase'den enerji verisi + heatmap ──
   useEffect(() => {
     if (!dataLoaded) return;
     let cancelled = false;
     const periodKey = `${periodDays}`;
 
     async function load() {
-      // Cache kontrolü
       if (readingsRef.current.periodKey === periodKey && readingsRef.current.sorted.length > 0) {
         setHeatmap(buildHeatmapFromReadings(readingsRef.current.sorted));
         return;
@@ -388,30 +382,6 @@ export default function DashboardPage() {
       } catch {
         // veri yüklenemezse boş kalır
       }
-
-      // Model tahminlerini çek
-      if (apiAvailable) {
-        try {
-          const [pRes, xRes] = await Promise.all([
-            fetch(`${ML_API}/forecast`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ model: "prophet", horizon: 24, region: "TR" }),
-            }),
-            fetch(`${ML_API}/forecast`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ model: "xgboost", horizon: 24, region: "TR" }),
-            }),
-          ]);
-          const preds = { prophet: [] as number[], xgboost: [] as number[] };
-          if (pRes.ok) preds.prophet = (await pRes.json()).predictions.map((p: { value: number }) => p.value);
-          if (xRes.ok) preds.xgboost = (await xRes.json()).predictions.map((p: { value: number }) => p.value);
-          if (!cancelled) tablePredsRef.current = preds;
-        } catch {
-          // tahminler opsiyonel
-        }
-      }
     }
 
     load();
@@ -419,28 +389,31 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [periodDays, dataLoaded]);
 
-  // ── 3) Model değiştiğinde → tahmin grafiği güncellenir ──
+  // ── 3) Model veya period değiştiğinde → timeline güncelle ──
   useEffect(() => {
     const sorted = readingsRef.current.sorted;
     if (sorted.length === 0) return;
+
+    if (!mlLoaded) {
+      setTimeline(buildTimelineFromReadings(sorted, []));
+      return;
+    }
 
     let cancelled = false;
 
     async function updateForecast() {
       let forecastPreds: Array<{ value: number; lower: number; upper: number }> = [];
-      if (apiAvailable) {
-        try {
-          const horizon = Math.min(sorted.length, 168);
-          const fRes = await fetch(`${ML_API}/forecast`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model, horizon, region: "TR" }),
-          });
-          if (fRes.ok) {
-            forecastPreds = (await fRes.json()).predictions || [];
-          }
-        } catch { /* grafik gerçek veriyi gösterir */ }
-      }
+      try {
+        const horizon = Math.min(sorted.length, 168);
+        const fRes = await fetch(`${ML_API}/forecast`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model, horizon, region: "TR" }),
+        });
+        if (fRes.ok) {
+          forecastPreds = (await fRes.json()).predictions || [];
+        }
+      } catch { /* grafik gerçek veriyi gösterir */ }
 
       if (!cancelled) {
         setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
@@ -450,9 +423,9 @@ export default function DashboardPage() {
     updateForecast();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, periodDays, readingsVersion]);
+  }, [model, periodDays, readingsVersion, mlLoaded]);
 
-  // ── 4) Tablo periyodu değiştiğinde → tablo verisi bağımsız yüklenir ──
+  // ── 4) Tablo periyodu değiştiğinde → tablo verisi yükle ──
   useEffect(() => {
     if (!dataLoaded) return;
     let cancelled = false;
@@ -497,9 +470,7 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tablePeriod, tablePeriodDays, readingsVersion, dataLoaded]);
 
-  // ── Veri çekiliyor durumu (overlay) ──
-
-  // ── Veriler yüklendi — metrikler hesapla ──
+  // ── Metrikler hesapla ──
   const tableMetrics = tableRows && tableRows.length > 0
     ? (() => {
         const last24Rows = tableRows.slice(-24);
@@ -578,6 +549,18 @@ export default function DashboardPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
         <Select options={PERIOD_OPTIONS} value={period} onChange={(e) => setPeriod(e.target.value)} />
         <Select options={MODEL_OPTIONS} value={model} onChange={(e) => setModel(e.target.value)} />
+
+        {!mlLoaded && (
+          <Button
+            size="sm"
+            onClick={handleLoadML}
+            disabled={mlLoading}
+            className="self-start"
+          >
+            {mlLoading ? "Tahminler yükleniyor..." : "Tahminleri Al"}
+          </Button>
+        )}
+
         <Button
           variant="outline"
           size="sm"
@@ -585,30 +568,36 @@ export default function DashboardPage() {
           disabled={dataRefreshing}
           className="self-start"
         >
-          Verileri Güncelle
+          {dataRefreshing ? "Güncelleniyor..." : "Verileri Güncelle"}
         </Button>
+
         {refreshMsg && (
           <span className="self-start rounded-md bg-blue-100 px-3 py-1 text-xs text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
             {refreshMsg}
           </span>
         )}
-        {apiAvailable && !dataRefreshing && (
+        {mlLoaded && (
           <span className="self-start rounded-md bg-green-100 px-3 py-1 text-xs text-green-800 dark:bg-green-900/30 dark:text-green-300">
-            EPİAŞ + ML API bağlı
+            ML API bağlı
           </span>
         )}
       </div>
 
-      {/* Progress banner — veri çekilirken */}
-      {dataRefreshing && refreshStep && (
+      {/* ML API yükleniyor banner */}
+      {mlLoading && mlStep && (
         <div className="rounded-lg border bg-card p-4">
           <div className="flex items-center gap-3">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-            <span className="text-sm font-medium">{refreshStep}</span>
+            <span className="text-sm font-medium">{mlStep}</span>
             <span className="ml-auto text-xs text-muted-foreground">
-              {REFRESH_STEPS.indexOf(refreshStep) + 1}/{REFRESH_STEPS.length}
+              {ML_STEPS.indexOf(mlStep) + 1}/{ML_STEPS.length}
             </span>
           </div>
+        </div>
+      )}
+      {mlError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">
+          {mlError}
         </div>
       )}
 
@@ -634,18 +623,51 @@ export default function DashboardPage() {
         <Card>
           <CardHeader><CardTitle className="text-base sm:text-lg">Enerji Tüketim Tahmini</CardTitle></CardHeader>
           <CardContent className="flex h-48 items-center justify-center text-muted-foreground text-sm">
-            Tahmin grafiği için verileri güncelleyin
+            Veriler yükleniyor...
           </CardContent>
         </Card>
       )}
 
       {/* Model Karşılaştırma + Özellik Önemi */}
       <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
-        <ModelComparison
-          periodData={periodData}
-          tableMetrics={tableMetrics}
-        />
-        <FeatureImportance features={features} />
+        {mlLoaded ? (
+          <ModelComparison
+            periodData={periodData}
+            tableMetrics={tableMetrics}
+          />
+        ) : (
+          <Card>
+            <CardHeader><CardTitle className="text-base sm:text-lg">Model Karşılaştırma</CardTitle></CardHeader>
+            <CardContent className="flex h-48 flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
+              {mlLoading ? (
+                <div className="flex items-center gap-2">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  <span>Modeller karşılaştırılıyor...</span>
+                </div>
+              ) : (
+                <span>Tahminleri yüklemek için &quot;Tahminleri Al&quot; butonuna tıklayın</span>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {mlLoaded ? (
+          <FeatureImportance features={features} />
+        ) : (
+          <Card>
+            <CardHeader><CardTitle className="text-base sm:text-lg">Özellik Önemi (XGBoost SHAP)</CardTitle></CardHeader>
+            <CardContent className="flex h-48 flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
+              {mlLoading ? (
+                <div className="flex items-center gap-2">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  <span>SHAP değerleri hesaplanıyor...</span>
+                </div>
+              ) : (
+                <span>Tahminleri yüklemek için &quot;Tahminleri Al&quot; butonuna tıklayın</span>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Isı Haritası */}
@@ -655,7 +677,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader><CardTitle className="text-base sm:text-lg">Saatlik Tüketim Isı Haritası</CardTitle></CardHeader>
           <CardContent className="flex h-48 items-center justify-center text-muted-foreground text-sm">
-            Isı haritası için verileri güncelleyin
+            Veriler yükleniyor...
           </CardContent>
         </Card>
       )}
@@ -680,7 +702,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader><CardTitle className="text-base sm:text-lg">Tahmin Veri Tablosu</CardTitle></CardHeader>
           <CardContent className="flex h-48 items-center justify-center text-muted-foreground text-sm">
-            Tablo verileri için verileri güncelleyin
+            Veriler yükleniyor...
           </CardContent>
         </Card>
       )}
