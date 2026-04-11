@@ -5,16 +5,16 @@ from dotenv import load_dotenv
 
 from pathlib import Path
 
-# .env.local veya .env dosyasını bul
+# .env.local veya .env dosyasını bul (override=False → Render/sistem env var'ları korunur)
 _env_local = Path(__file__).resolve().parent.parent / ".env.local"
 _env = Path(__file__).resolve().parent.parent / ".env"
 
 if _env_local.exists():
-    load_dotenv(_env_local)
+    load_dotenv(_env_local, override=False)
 elif _env.exists():
-    load_dotenv(_env)
+    load_dotenv(_env, override=False)
 else:
-    load_dotenv()
+    load_dotenv(override=False)
 
 # Supabase
 SUPABASE_URL: str = os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")

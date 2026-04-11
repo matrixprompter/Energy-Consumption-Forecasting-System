@@ -123,6 +123,8 @@ async def health():
         "status": "healthy",
         "models_available": get_available_models(),
         "lazy_load": True,
+        "supabase_url_set": bool(SUPABASE_URL),
+        "supabase_key_set": bool(SUPABASE_SERVICE_KEY),
     }
 
 

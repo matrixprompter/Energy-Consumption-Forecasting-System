@@ -251,44 +251,14 @@ export default function DashboardPage() {
     }
   }, [dataRefreshing]);
 
-  // ── 1) Başlangıç: Supabase'de veri var mı kontrol et ──
+  // ── 1) Başlangıç: ML API durumunu kontrol et ──
   useEffect(() => {
     async function init() {
-      // Önce Supabase'den mevcut veri kontrol et
-      try {
-        const now = new Date();
-        const from = new Date(now.getTime() - 24 * 3600000);
-        const res = await fetch(
-          `/api/energy?from=${from.toISOString()}&to=${now.toISOString()}&limit=24`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (data.data && data.data.length > 0) {
-            setDataLoaded(true);
-          }
-        }
-      } catch {
-        // Supabase'e erişilemezse boş kalır
-      }
-
       // ML API kontrol
       try {
         const res = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(5000) });
         if (res.ok) {
           setApiAvailable(true);
-          // Model karşılaştırma + SHAP yükle
-          const [compRes, shapRes] = await Promise.all([
-            fetch(`${ML_API}/model-comparison/all`),
-            fetch(`${ML_API}/feature-importance`),
-          ]);
-          if (compRes.ok) {
-            const data = await compRes.json();
-            if (Object.keys(data).length > 0) setPeriodData(data);
-          }
-          if (shapRes.ok) {
-            const shapData = await shapRes.json();
-            if (shapData.features?.length > 0) setFeatures(shapData.features);
-          }
         }
       } catch {
         // API yoksa buton ile bağlanılacak

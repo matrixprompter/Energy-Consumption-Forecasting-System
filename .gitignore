@@ -39,6 +39,7 @@ venv/
 .venv/
 *.pkl
 *.joblib
+.eptr2-tgt
 
 # misc
 *.tsbuildinfo
