@@ -116,13 +116,17 @@ export function ForecastTable({ rows, period, onPeriodChange }: ForecastTablePro
                   <tr key={idx} className="border-b last:border-0 hover:bg-muted/50">
                     <td className="p-2 font-medium sm:p-3">{row.hour}</td>
                     <td className="p-2 text-right sm:p-3">{row.actual.toLocaleString("tr-TR")}</td>
-                    <td className="p-2 text-right sm:p-3">{row.prophet.toLocaleString("tr-TR")}</td>
-                    <td className={`p-2 text-right font-mono sm:p-3 ${errorColor(pe)} ${errorBg(pe)} rounded`}>
-                      {pe.toFixed(1)}%
+                    <td className="p-2 text-right sm:p-3">
+                      {row.prophet > 0 ? row.prophet.toLocaleString("tr-TR") : <span className="text-muted-foreground">—</span>}
                     </td>
-                    <td className="p-2 text-right sm:p-3">{row.xgboost.toLocaleString("tr-TR")}</td>
-                    <td className={`p-2 text-right font-mono sm:p-3 ${errorColor(xe)} ${errorBg(xe)} rounded`}>
-                      {xe.toFixed(1)}%
+                    <td className={`p-2 text-right font-mono sm:p-3 ${row.prophet > 0 ? `${errorColor(pe)} ${errorBg(pe)}` : ""} rounded`}>
+                      {row.prophet > 0 ? `${pe.toFixed(1)}%` : <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="p-2 text-right sm:p-3">
+                      {row.xgboost > 0 ? row.xgboost.toLocaleString("tr-TR") : <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className={`p-2 text-right font-mono sm:p-3 ${row.xgboost > 0 ? `${errorColor(xe)} ${errorBg(xe)}` : ""} rounded`}>
+                      {row.xgboost > 0 ? `${xe.toFixed(1)}%` : <span className="text-muted-foreground">—</span>}
                     </td>
                   </tr>
                 );

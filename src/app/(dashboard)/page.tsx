@@ -109,8 +109,8 @@ function buildTableRows(
     return {
       hour: `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:00`,
       actual: Math.round(r.consumption_mwh),
-      prophet: hasPred ? Math.round(allPreds.prophet[predIdx] ?? r.consumption_mwh) : Math.round(r.consumption_mwh),
-      xgboost: hasPred ? Math.round(allPreds.xgboost[predIdx] ?? r.consumption_mwh) : Math.round(r.consumption_mwh),
+      prophet: hasPred && allPreds.prophet.length > 0 ? Math.round(allPreds.prophet[predIdx] ?? 0) : 0,
+      xgboost: hasPred && allPreds.xgboost.length > 0 ? Math.round(allPreds.xgboost[predIdx] ?? 0) : 0,
     };
   });
 }
@@ -520,15 +520,15 @@ export default function DashboardPage() {
   const hm = heatmap;
   const tr = tableRows || [];
 
-  // KPI
-  const kpiSource = tr.length > 0 ? tr.slice(-24) : [];
-  const avgConsumption = kpiSource.length > 0
-    ? kpiSource.reduce((a, b) => a + b.actual, 0) / kpiSource.length
+  // KPI — ana period filtresine bağlı (readingsRef)
+  const kpiReadings = readingsRef.current.sorted;
+  const avgConsumption = kpiReadings.length > 0
+    ? kpiReadings.reduce((a, b) => a + b.consumption_mwh, 0) / kpiReadings.length
     : 0;
-  const peakRow = kpiSource.length > 0
-    ? kpiSource.reduce((best, row) => (row.actual > best.actual ? row : best), kpiSource[0])
+  const peakReading = kpiReadings.length > 0
+    ? kpiReadings.reduce((best, r) => (r.consumption_mwh > best.consumption_mwh ? r : best), kpiReadings[0])
     : null;
-  const peakHour = peakRow ? parseInt(peakRow.hour ?? "0", 10) : 0;
+  const peakHour = peakReading ? new Date(peakReading.timestamp).getHours() : 0;
 
   const isLive = period === "live24h";
   const activePeriod = isLive ? null : (periodData[period] || periodData["7d"] || Object.values(periodData)[0]);
