@@ -116,17 +116,6 @@ function buildTableRows(
 }
 
 // ---------------------------------------------------------------------------
-// ML API tahmin adımları
-// ---------------------------------------------------------------------------
-const ML_STEPS = [
-  "ML API sunucusu başlatılıyor...",
-  "Prophet ve XGBoost modelleri yükleniyor...",
-  "Tahminler oluşturuluyor...",
-  "Model karşılaştırma verileri alınıyor...",
-  "SHAP özellik analizi hesaplanıyor...",
-];
-
-// ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
 interface TimelineData {
@@ -146,16 +135,15 @@ type PeriodComparison = {
 export default function DashboardPage() {
   const [period, setPeriod] = useState("live24h");
   const [model, setModel] = useState("xgboost");
-  const [mlLoaded, setMlLoaded] = useState(false);
-  const [mlLoading, setMlLoading] = useState(false);
-  const [mlStep, setMlStep] = useState<string | null>(null);
-  const [mlError, setMlError] = useState<string | null>(null);
   const [periodData, setPeriodData] = useState<Record<string, PeriodComparison>>({});
   const [features, setFeatures] = useState<Array<{ name: string; feature: string; shap_value: number }>>([]);
   const [dataLoaded, setDataLoaded] = useState(false);
 
-  const [dataRefreshing, setDataRefreshing] = useState(false);
-  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  const [mlLoading, setMlLoading] = useState(false);
+  const [mlStep, setMlStep] = useState<string | null>(null);
+  const [mlError, setMlError] = useState<string | null>(null);
+  const [mlLoaded, setMlLoaded] = useState(false);
+
   const [timeline, setTimeline] = useState<TimelineData | null>(null);
   const [heatmap, setHeatmap] = useState<number[][] | null>(null);
   const [tableRows, setTableRows] = useState<Array<{
@@ -174,28 +162,23 @@ export default function DashboardPage() {
   const periodDays = period === "live24h" ? 1 : period === "1d" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : period === "180d" ? 180 : 365;
   const tablePeriodDays = tablePeriod === "live24h" ? 1 : tablePeriod === "1d" ? 1 : tablePeriod === "7d" ? 7 : tablePeriod === "30d" ? 30 : tablePeriod === "90d" ? 90 : tablePeriod === "180d" ? 180 : 365;
 
-  // ── Tahminleri Al butonu — ML API başlat + tahmin yükle ──
+  // ── Tahminleri Al butonu — ML API başlat, tahmin yap, Supabase'e kaydet ──
   const handleLoadML = useCallback(async () => {
     if (mlLoading) return;
     setMlLoading(true);
     setMlError(null);
 
     try {
-      // Adım 1: ML API'yi başlat (Render cold start ~10sn)
-      setMlStep(ML_STEPS[0]);
-      const healthRes = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(30000) });
+      // 1. ML API'yi başlat (Render free tier cold start ~10-30sn)
+      setMlStep("ML API sunucusu başlatılıyor...");
+      const healthRes = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(60000) });
       if (!healthRes.ok) {
         setMlError("ML API sunucusuna ulaşılamıyor");
-        setMlLoading(false);
-        setMlStep(null);
         return;
       }
 
-      // Adım 2: Tahminleri çek
-      setMlStep(ML_STEPS[1]);
-      await new Promise((r) => setTimeout(r, 800));
-
-      setMlStep(ML_STEPS[2]);
+      // 2. Tahminleri çek
+      setMlStep("Prophet ve XGBoost tahminleri oluşturuluyor...");
       const sorted = readingsRef.current.sorted;
       let preds = { prophet: [] as number[], xgboost: [] as number[] };
       let forecastPreds: Array<{ value: number; lower: number; upper: number }> = [];
@@ -221,28 +204,17 @@ export default function DashboardPage() {
         if (pRes.ok) preds.prophet = (await pRes.json()).predictions.map((p: { value: number }) => p.value);
         if (xRes.ok) preds.xgboost = (await xRes.json()).predictions.map((p: { value: number }) => p.value);
         if (fRes.ok) forecastPreds = (await fRes.json()).predictions || [];
-      } catch { /* tahmin hatası — devam et */ }
+      } catch { /* tahmin hatası */ }
 
       tablePredsRef.current = preds;
 
-      // Timeline ve tablo güncelle
       if (sorted.length > 0) {
         setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
         setTableRows(buildTableRows(sorted.slice(-tablePeriodDays * 24), preds));
       }
 
-      // Adım 3: Model karşılaştırma
-      setMlStep(ML_STEPS[3]);
-      try {
-        const compRes = await fetch(`${ML_API}/model-comparison/all`);
-        if (compRes.ok) {
-          const data = await compRes.json();
-          if (Object.keys(data).length > 0) setPeriodData(data);
-        }
-      } catch { /* opsiyonel */ }
-
-      // Adım 4: SHAP
-      setMlStep(ML_STEPS[4]);
+      // 3. SHAP
+      setMlStep("SHAP özellik analizi hesaplanıyor...");
       try {
         const shapRes = await fetch(`${ML_API}/feature-importance`);
         if (shapRes.ok) {
@@ -254,75 +226,17 @@ export default function DashboardPage() {
       setMlLoaded(true);
       setReadingsVersion((v) => v + 1);
     } catch {
-      setMlError("ML API bağlantı hatası");
+      setMlError("ML API bağlantı hatası — sunucu başlatılamamış olabilir");
     } finally {
       setMlLoading(false);
       setMlStep(null);
     }
   }, [mlLoading, model, tablePeriodDays]);
 
-  // ── Verileri Güncelle butonu — EPİAŞ'tan taze veri çek ──
-  const handleRefreshData = useCallback(async () => {
-    if (dataRefreshing) return;
-    setDataRefreshing(true);
-    setRefreshMsg("EPİAŞ'tan veriler çekiliyor...");
-
-    try {
-      const healthRes = await fetch(`${ML_API}/health`, { signal: AbortSignal.timeout(10000) });
-      if (!healthRes.ok) {
-        setRefreshMsg("ML API sunucusuna ulaşılamıyor");
-        setDataRefreshing(false);
-        return;
-      }
-
-      const now = new Date();
-      const from = new Date(now.getTime() - 7 * 24 * 3600000);
-      const updateRes = await fetch(`${ML_API}/update-data`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          from_date: from.toISOString().slice(0, 10),
-          to_date: now.toISOString().slice(0, 10),
-        }),
-      });
-
-      let rowCount = 0;
-      if (updateRes.ok) {
-        const updateData = await updateRes.json();
-        rowCount = updateData.rows_inserted || 0;
-      }
-
-      // Supabase'den güncel veriyi yükle
-      const energyRes = await fetch(
-        `/api/energy?from=${from.toISOString()}&to=${now.toISOString()}&limit=${7 * 24}`
-      );
-      if (energyRes.ok) {
-        const energyData = await energyRes.json();
-        const readings: EnergyReading[] = energyData.data || [];
-        const sorted = sortReadings(readings);
-        if (sorted.length > 0) {
-          readingsRef.current = { periodKey: "7", sorted };
-          setHeatmap(buildHeatmapFromReadings(sorted));
-          setTimeline(buildTimelineFromReadings(sorted, []));
-          tableReadingsRef.current = { periodKey: "1", sorted: sorted.slice(-24) };
-          setTableRows(buildTableRows(sorted.slice(-24), tablePredsRef.current));
-          setDataLoaded(true);
-          setReadingsVersion((v) => v + 1);
-        }
-      }
-
-      setRefreshMsg(`${rowCount} satır güncellendi`);
-    } catch {
-      setRefreshMsg("Bağlantı hatası");
-    } finally {
-      setDataRefreshing(false);
-      setTimeout(() => setRefreshMsg(null), 8000);
-    }
-  }, [dataRefreshing]);
-
-  // ── 1) Başlangıç: Supabase'den enerji verisi yükle (ML API'ye dokunma) ──
+  // ── 1) Başlangıç: Supabase'den HER ŞEYİ yükle ──
   useEffect(() => {
     async function init() {
+      // 1. Enerji verisi
       try {
         const now = new Date();
         const from = new Date(now.getTime() - 7 * 24 * 3600000);
@@ -344,9 +258,52 @@ export default function DashboardPage() {
             setReadingsVersion((v) => v + 1);
           }
         }
-      } catch {
-        // Supabase'e erişilemezse boş kalır
-      }
+      } catch { /* Supabase erişim hatası */ }
+
+      // 2. Model karşılaştırma (Supabase model_comparisons tablosu)
+      try {
+        const compRes = await fetch("/api/forecast/compare");
+        if (compRes.ok) {
+          const data = await compRes.json();
+          if (Object.keys(data).length > 0) setPeriodData(data);
+        }
+      } catch { /* opsiyonel */ }
+
+      // 3. Forecasts tablosundan tahmin verilerini çek
+      try {
+        const fcRes = await fetch("/api/forecast/latest");
+        if (fcRes.ok) {
+          const fcData = await fcRes.json();
+          const preds = { prophet: [] as number[], xgboost: [] as number[] };
+
+          if (fcData.prophet?.predictions) {
+            preds.prophet = fcData.prophet.predictions.map((p: { value: number }) => p.value);
+          }
+          if (fcData.xgboost?.predictions) {
+            preds.xgboost = fcData.xgboost.predictions.map((p: { value: number }) => p.value);
+          }
+
+          if (preds.prophet.length > 0 || preds.xgboost.length > 0) {
+            tablePredsRef.current = preds;
+
+            // Tablo ve timeline'ı tahminlerle güncelle
+            const sorted = readingsRef.current.sorted;
+            if (sorted.length > 0) {
+              setTableRows(buildTableRows(sorted.slice(-24), preds));
+
+              // Timeline'a da tahminleri ekle
+              const forecastPreds = preds.xgboost.map((v, i) => ({
+                value: v || preds.prophet[i] || 0,
+                lower: (v || preds.prophet[i] || 0) * 0.95,
+                upper: (v || preds.prophet[i] || 0) * 1.05,
+              }));
+              setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
+            }
+
+            setMlLoaded(true);
+          }
+        }
+      } catch { /* opsiyonel */ }
     }
     init();
   }, []);
@@ -379,9 +336,7 @@ export default function DashboardPage() {
           setHeatmap(buildHeatmapFromReadings(sorted));
           setReadingsVersion((v) => v + 1);
         }
-      } catch {
-        // veri yüklenemezse boş kalır
-      }
+      } catch { /* veri yüklenemezse boş kalır */ }
     }
 
     load();
@@ -394,36 +349,23 @@ export default function DashboardPage() {
     const sorted = readingsRef.current.sorted;
     if (sorted.length === 0) return;
 
-    if (!mlLoaded) {
+    // Tahmin yoksa sadece gerçek veriyi göster
+    const preds = tablePredsRef.current;
+    if (preds.prophet.length === 0 && preds.xgboost.length === 0) {
       setTimeline(buildTimelineFromReadings(sorted, []));
       return;
     }
 
-    let cancelled = false;
-
-    async function updateForecast() {
-      let forecastPreds: Array<{ value: number; lower: number; upper: number }> = [];
-      try {
-        const horizon = Math.min(sorted.length, 168);
-        const fRes = await fetch(`${ML_API}/forecast`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model, horizon, region: "TR" }),
-        });
-        if (fRes.ok) {
-          forecastPreds = (await fRes.json()).predictions || [];
-        }
-      } catch { /* grafik gerçek veriyi gösterir */ }
-
-      if (!cancelled) {
-        setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
-      }
-    }
-
-    updateForecast();
-    return () => { cancelled = true; };
+    // Seçili modelin tahminlerini kullan
+    const selectedPreds = model === "prophet" ? preds.prophet : preds.xgboost;
+    const forecastPreds = selectedPreds.map((v) => ({
+      value: v,
+      lower: v * 0.95,
+      upper: v * 1.05,
+    }));
+    setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, periodDays, readingsVersion, mlLoaded]);
+  }, [model, periodDays, readingsVersion]);
 
   // ── 4) Tablo periyodu değiştiğinde → tablo verisi yükle ──
   useEffect(() => {
@@ -460,9 +402,7 @@ export default function DashboardPage() {
           tableReadingsRef.current = { periodKey: tpKey, sorted };
           setTableRows(buildTableRows(sorted, tablePredsRef.current));
         }
-      } catch {
-        // veri yüklenemezse boş kalır
-      }
+      } catch { /* veri yüklenemezse boş kalır */ }
     }
 
     loadTableData();
@@ -471,14 +411,15 @@ export default function DashboardPage() {
   }, [tablePeriod, tablePeriodDays, readingsVersion, dataLoaded]);
 
   // ── Metrikler hesapla ──
-  const tableMetrics = tableRows && tableRows.length > 0
+  const tableMetrics = tableRows && tableRows.length > 0 && tableRows.some((r) => r.prophet > 0 || r.xgboost > 0)
     ? (() => {
-        const last24Rows = tableRows.slice(-24);
+        const predRows = tableRows.filter((r) => r.prophet > 0 || r.xgboost > 0);
         function computeModelMetrics(
           rows: Array<{ actual: number; prophet: number; xgboost: number }>,
           modelKey: "prophet" | "xgboost",
         ) {
-          const n = rows.length;
+          const validRows = rows.filter((r) => r[modelKey] > 0);
+          const n = validRows.length;
           if (n === 0) return { mape: 0, rmse: 0, mae: 0, r2: 0 };
           let sumAbsPctErr = 0;
           let sumSqErr = 0;
@@ -486,12 +427,10 @@ export default function DashboardPage() {
           let sumActual = 0;
           let sumSqTot = 0;
 
-          for (const r of rows) {
-            sumActual += r.actual;
-          }
+          for (const r of validRows) sumActual += r.actual;
           const meanActual = sumActual / n;
 
-          for (const r of rows) {
+          for (const r of validRows) {
             const pred = r[modelKey];
             const err = r.actual - pred;
             sumAbsPctErr += Math.abs(err / r.actual);
@@ -508,8 +447,8 @@ export default function DashboardPage() {
           };
         }
 
-        const p = computeModelMetrics(last24Rows, "prophet");
-        const x = computeModelMetrics(last24Rows, "xgboost");
+        const p = computeModelMetrics(predRows, "prophet");
+        const x = computeModelMetrics(predRows, "xgboost");
         const minMape = Math.min(p.mape, x.mape);
         const w = p.mape === minMape ? "prophet" : "xgboost";
         return { prophet: p, xgboost: x, winner: w };
@@ -520,7 +459,7 @@ export default function DashboardPage() {
   const hm = heatmap;
   const tr = tableRows || [];
 
-  // KPI — ana period filtresine bağlı (readingsRef)
+  // KPI — ana period filtresine bağlı
   const kpiReadings = readingsRef.current.sorted;
   const avgConsumption = kpiReadings.length > 0
     ? kpiReadings.reduce((a, b) => a + b.consumption_mwh, 0) / kpiReadings.length
@@ -561,24 +500,9 @@ export default function DashboardPage() {
           </Button>
         )}
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRefreshData}
-          disabled={dataRefreshing}
-          className="self-start"
-        >
-          {dataRefreshing ? "Güncelleniyor..." : "Verileri Güncelle"}
-        </Button>
-
-        {refreshMsg && (
-          <span className="self-start rounded-md bg-blue-100 px-3 py-1 text-xs text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
-            {refreshMsg}
-          </span>
-        )}
         {mlLoaded && (
           <span className="self-start rounded-md bg-green-100 px-3 py-1 text-xs text-green-800 dark:bg-green-900/30 dark:text-green-300">
-            ML API bağlı
+            Tahminler yüklendi
           </span>
         )}
       </div>
@@ -589,9 +513,6 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             <span className="text-sm font-medium">{mlStep}</span>
-            <span className="ml-auto text-xs text-muted-foreground">
-              {ML_STEPS.indexOf(mlStep) + 1}/{ML_STEPS.length}
-            </span>
           </div>
         </div>
       )}
@@ -630,7 +551,7 @@ export default function DashboardPage() {
 
       {/* Model Karşılaştırma + Özellik Önemi */}
       <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
-        {mlLoaded ? (
+        {Object.keys(periodData).length > 0 ? (
           <ModelComparison
             periodData={periodData}
             tableMetrics={tableMetrics}
@@ -638,20 +559,13 @@ export default function DashboardPage() {
         ) : (
           <Card>
             <CardHeader><CardTitle className="text-base sm:text-lg">Model Karşılaştırma</CardTitle></CardHeader>
-            <CardContent className="flex h-48 flex-col items-center justify-center gap-3 text-muted-foreground text-sm">
-              {mlLoading ? (
-                <div className="flex items-center gap-2">
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                  <span>Modeller karşılaştırılıyor...</span>
-                </div>
-              ) : (
-                <span>Tahminleri yüklemek için &quot;Tahminleri Al&quot; butonuna tıklayın</span>
-              )}
+            <CardContent className="flex h-48 items-center justify-center text-muted-foreground text-sm">
+              Veriler yükleniyor...
             </CardContent>
           </Card>
         )}
 
-        {mlLoaded ? (
+        {features.length > 0 ? (
           <FeatureImportance features={features} />
         ) : (
           <Card>
@@ -663,7 +577,7 @@ export default function DashboardPage() {
                   <span>SHAP değerleri hesaplanıyor...</span>
                 </div>
               ) : (
-                <span>Tahminleri yüklemek için &quot;Tahminleri Al&quot; butonuna tıklayın</span>
+                <span>SHAP analizi için &quot;Tahminleri Al&quot; butonuna tıklayın</span>
               )}
             </CardContent>
           </Card>
