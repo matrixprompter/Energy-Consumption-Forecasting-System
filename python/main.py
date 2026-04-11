@@ -71,13 +71,6 @@ _supabase = None
 def get_supabase():
     global _supabase
     if _supabase is None:
-        print(f"[SUPABASE] URL length={len(SUPABASE_URL)}, KEY length={len(SUPABASE_SERVICE_KEY)}")
-        print(f"[SUPABASE] URL='{SUPABASE_URL[:30]}...'")
-        print(f"[SUPABASE] KEY starts='{SUPABASE_SERVICE_KEY[:15]}...' ends='...{SUPABASE_SERVICE_KEY[-5:]}'")
-        if not SUPABASE_URL:
-            raise ValueError("NEXT_PUBLIC_SUPABASE_URL env var boş!")
-        if not SUPABASE_SERVICE_KEY:
-            raise ValueError("SUPABASE_SERVICE_ROLE_KEY env var boş!")
         _supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
     return _supabase
 
@@ -130,8 +123,6 @@ async def health():
         "status": "healthy",
         "models_available": get_available_models(),
         "lazy_load": True,
-        "supabase_url_set": bool(SUPABASE_URL),
-        "supabase_key_set": bool(SUPABASE_SERVICE_KEY),
     }
 
 

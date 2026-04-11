@@ -34,9 +34,6 @@ _supabase = None
 def get_supabase():
     global _supabase
     if _supabase is None:
-        print(f"[DC-SUPABASE] URL length={len(SUPABASE_URL)}, KEY length={len(SUPABASE_SERVICE_KEY)}")
-        if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-            raise ValueError("Supabase env var'ları boş! NEXT_PUBLIC_SUPABASE_URL ve SUPABASE_SERVICE_ROLE_KEY kontrol edin.")
         _supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
     return _supabase
 
