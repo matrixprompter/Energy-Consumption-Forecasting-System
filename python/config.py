@@ -20,18 +20,18 @@ else:
 SUPABASE_URL: str = os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY: str = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
-# Startup debug — Render loglarında env var durumunu göster
-print(f"[CONFIG] SUPABASE_URL = {'SET (' + SUPABASE_URL[:20] + '...)' if SUPABASE_URL else 'EMPTY!'}")
-print(f"[CONFIG] SUPABASE_SERVICE_KEY = {'SET (' + SUPABASE_SERVICE_KEY[:10] + '...)' if SUPABASE_SERVICE_KEY else 'EMPTY!'}")
-print(f"[CONFIG] EPIAS_USERNAME = {'SET' if EPIAS_USERNAME else 'EMPTY!'}")
-print(f"[CONFIG] All env var keys: {[k for k in os.environ.keys() if 'SUPA' in k.upper() or 'NEXT' in k.upper()]}")
-
 # ENTSO-E (opsiyonel)
 ENTSOE_API_KEY: str = os.environ.get("ENTSOE_API_KEY", "")
 
 # EPİAŞ Şeffaflık 2.0 (eptr2 kütüphanesi)
 EPIAS_USERNAME: str = os.environ.get("EPIAS_USERNAME", "")
 EPIAS_PASSWORD: str = os.environ.get("EPIAS_PASSWORD", "")
+
+# Startup debug — Render loglarında env var durumunu göster
+print(f"[CONFIG] SUPABASE_URL = {'SET (' + SUPABASE_URL[:20] + '...)' if SUPABASE_URL else 'EMPTY!'}")
+print(f"[CONFIG] SUPABASE_SERVICE_KEY = {'SET (' + SUPABASE_SERVICE_KEY[:10] + '...)' if SUPABASE_SERVICE_KEY else 'EMPTY!'}")
+print(f"[CONFIG] EPIAS_USERNAME = {'SET' if EPIAS_USERNAME else 'EMPTY!'}")
+print(f"[CONFIG] All env var keys: {[k for k in os.environ.keys() if 'SUPA' in k.upper() or 'NEXT' in k.upper()]}")
 
 # Open-Meteo (kayıt gereksiz)
 OPEN_METEO_URL: str = "https://archive-api.open-meteo.com/v1/archive"
