@@ -20,8 +20,8 @@ End-to-end machine learning platform that ingests live data from EPİAŞ (Turkey
 - **Fair Multi-Period Evaluation** — Rolling 24-step forecast windows across 6 periods (1 day → 1 year), each with independent winner determination
 - **Memory-Efficient Serving** — Lazy-load context manager pattern loads one model at a time, enabling deployment on 512 MB RAM (Render free tier)
 - **Full-Stack Dashboard** — Next.js 16 App Router with real-time KPIs, interactive charts, heatmaps, scenario analysis, and multi-format export
-- **Graceful Degradation** — Dashboard operates in demo mode with deterministic seeded data when ML API is unavailable
-- **Model Transparency** — Color-coded metric comparison (green = winner, red = loser), per-metric tooltips, and technical evaluation methodology note
+- **Automated Data Pipeline** — Vercel Cron ingests hourly EPİAŞ data and refreshes daily forecasts automatically via ML API
+- **Model Transparency** — Color-coded metric comparison (green = winner, red = loser), per-metric tooltips, SHAP feature importance chart, and technical evaluation methodology note
 
 ---
 
@@ -38,7 +38,7 @@ End-to-end machine learning platform that ingests live data from EPİAŞ (Turkey
 | **Database** | Supabase (PostgreSQL 17) with Row Level Security |
 | **Model Persistence** | joblib (compress=3) |
 | **Export** | jsPDF (PDF reports), xlsx (Excel workbooks), CSV |
-| **Deployment** | Vercel (Frontend) + Render (Python API) |
+| **Deployment** | Vercel (Frontend + Cron) + Render (Python ML API) |
 
 ---
 
@@ -70,6 +70,7 @@ EPİAŞ Şeffaflık 2.0 API          Open-Meteo API
         │           ▼         │
         │    .pkl model files  │
         │    comparison results│
+        │    SHAP values       │
         └─────────┬───────────┘
                   │
         ┌─────────▼───────────┐
@@ -79,11 +80,31 @@ EPİAŞ Şeffaflık 2.0 API          Open-Meteo API
         └─────────┬───────────┘
                   │
         ┌─────────▼───────────┐
+        │  Vercel Cron Jobs    │
+        │  Hourly data ingest  │     /api/cron/update-data
+        │  Daily forecast run  │     /api/cron/run-forecast (06:00 UTC)
+        └─────────┬───────────┘
+                  │
+        ┌─────────▼───────────┐
         │  Next.js 16 Dashboard│
-        │  Real-time KPIs      │     Auto-detects API availability
-        │  Interactive charts  │     Falls back to demo mode
+        │  Pure Supabase reader│     All data from Supabase
+        │  Real-time KPIs      │     No direct ML API dependency
+        │  Interactive charts  │
         │  Multi-format export │
         └─────────────────────┘
+```
+
+### Data Flow
+
+The dashboard reads all data exclusively from Supabase. The ML API (on Render) is only called by Vercel Cron jobs to ingest data and generate forecasts. This separation ensures the dashboard stays responsive even when the ML API is cold-starting on Render's free tier.
+
+```
+Vercel Cron (hourly)  ──►  ML API /update-data  ──►  Supabase energy_readings
+Vercel Cron (daily)   ──►  ML API /forecast     ──►  Supabase forecasts
+                                                       + model_comparisons
+                                                       + SHAP metadata
+
+Dashboard (browser)   ──►  Next.js API routes   ──►  Supabase (read-only)
 ```
 
 ### Lazy-Load Model Pattern
@@ -135,7 +156,7 @@ Each period evaluates models independently — a model that excels at 1-day fore
 ## Dashboard Components
 
 ### KPI Cards
-Four summary cards computed from live data: average consumption (MWh), peak demand hour, best model accuracy (MAPE %), and winning model name. KPIs dynamically update based on the selected period filter.
+Four summary cards computed from Supabase data: average consumption (MWh), peak demand hour, best model accuracy (MAPE %), and winning model name. KPIs dynamically update based on the selected period filter.
 
 ### Forecast Chart
 Interactive line chart with actual vs. predicted values and 95% confidence band. Supports zoom/pan via mouse wheel and drag. Model selector switches between Prophet and XGBoost predictions.
@@ -147,13 +168,13 @@ Metric table comparing Prophet and XGBoost across MAPE, RMSE, MAE, and R². Gree
 7-day x 24-hour consumption heatmap. Color intensity scales from light (low demand) to dark blue (high demand). Peak cell highlighted with red outline. Cells with no data display "-" instead of misleading zeros.
 
 ### Feature Importance
-Horizontal bar chart of XGBoost SHAP values for all 14 engineered features. Shows which features drive predictions most (lag_1h and lag_24h typically dominate).
+Horizontal bar chart of XGBoost SHAP values for all 14 engineered features. SHAP values are computed during model evaluation and stored in the `forecasts.metadata` column. Shows which features drive predictions most (lag_1h and lag_24h typically dominate).
 
 ### Scenario Analysis
 Interactive what-if tool: adjust temperature, hour, day of week, and holiday flag via sliders and switches. XGBoost predicts consumption for the configured scenario in real-time.
 
 ### Forecast Table
-Scrollable data table with independent period filter (Son 24 Saat through 1 Yıl). Each period fetches its own data from Supabase. Columns: timestamp, actual consumption, Prophet prediction, Prophet error %, XGBoost prediction, XGBoost error %. Error cells are color-coded: green (<5%), yellow (5-10%), red (>10%). Sticky header, CSV export per selected period.
+Scrollable data table with independent period filter (Son 24 Saat through 1 Yıl). Each period fetches its own data from Supabase with paginated queries (handles 1000+ row batches). Columns: timestamp, actual consumption, Prophet prediction, Prophet error %, XGBoost prediction, XGBoost error %. Error cells are color-coded: green (<5%), yellow (5-10%), red (>10%). Sticky header, CSV export per selected period.
 
 ### Export Panel
 Multi-format export: PDF report (jsPDF with charts and metrics summary), Excel workbook (xlsx with structured sheets), and raw CSV. Export reflects the currently selected period and model data.
@@ -183,12 +204,12 @@ Meta's additive time series decomposition model. Configured with daily and yearl
 
 | Period | XGBoost MAPE | Prophet MAPE | Winner |
 |--------|-------------|-------------|--------|
-| 1 Gün | ~1.4% | ~3.5% | XGBoost |
-| 7 Gün | ~1.8% | ~5.2% | XGBoost |
-| 1 Ay | ~2.1% | ~12.8% | XGBoost |
-| 3 Ay | ~2.8% | ~38.6% | XGBoost |
-| 6 Ay | ~3.2% | ~72.4% | XGBoost |
-| 1 Yıl | ~3.7% | ~103.6% | XGBoost |
+| 1 Gün | 1.42% | 2.80% | XGBoost |
+| 7 Gün | 2.13% | 11.08% | XGBoost |
+| 1 Ay | 2.68% | 23.51% | XGBoost |
+| 3 Ay | 3.64% | 145.98% | XGBoost |
+| 6 Ay | 3.64% | 145.98% | XGBoost |
+| 1 Yıl | 3.64% | 145.98% | XGBoost |
 
 > Prophet's additive decomposition degrades significantly over longer horizons where lag-based features become critical. XGBoost's recursive strategy maintains sub-4% MAPE even at 1-year scale.
 
@@ -204,17 +225,19 @@ Meta's additive time series decomposition model. Configured with daily and yearl
 │   │   ├── globals.css                # Tailwind CSS 4 + oklch theme tokens
 │   │   ├── (dashboard)/
 │   │   │   ├── layout.tsx             # Dashboard shell (header, theme, onboarding)
-│   │   │   └── page.tsx               # Main dashboard (data loading, state, KPIs)
+│   │   │   └── page.tsx               # Main dashboard (Supabase data loading, state, KPIs)
 │   │   └── api/
-│   │       ├── energy/route.ts        # GET /api/energy (Supabase query)
+│   │       ├── energy/route.ts        # GET /api/energy (paginated Supabase query)
 │   │       ├── forecast/
 │   │       │   ├── route.ts           # GET /api/forecast
-│   │       │   ├── compare/route.ts   # GET /api/forecast/compare
+│   │       │   ├── compare/route.ts   # GET /api/forecast/compare (model_comparisons)
+│   │       │   ├── latest/route.ts    # GET /api/forecast/latest (forecasts table)
+│   │       │   ├── shap/route.ts      # GET /api/forecast/shap (SHAP from metadata)
 │   │       │   └── scenario/route.ts  # POST /api/forecast/scenario
 │   │       ├── models/route.ts        # GET /api/models
 │   │       └── cron/
-│   │           ├── update-data/       # Hourly EPİAŞ data ingestion
-│   │           └── run-forecast/      # Daily forecast refresh (06:00 UTC)
+│   │           ├── update-data/       # Hourly EPİAŞ data ingestion (Vercel Cron)
+│   │           └── run-forecast/      # Daily forecast refresh at 06:00 UTC (Vercel Cron)
 │   ├── components/
 │   │   ├── ForecastChart.tsx           # Line chart + confidence band + zoom/pan
 │   │   ├── ModelComparison.tsx         # Metric table + period tabs + color coding
@@ -236,8 +259,9 @@ Meta's additive time series decomposition model. Configured with daily and yearl
 │   ├── config.py                       # Environment configuration
 │   ├── data_collector.py               # EPİAŞ + Open-Meteo data pipeline
 │   ├── feature_engineering.py          # 14-feature engineering pipeline
-│   ├── evaluate.py                     # Multi-period rolling evaluation
+│   ├── evaluate.py                     # Multi-period rolling evaluation + SHAP
 │   ├── requirements.txt                # Python dependencies
+│   ├── requirements-render.txt         # Render deployment dependencies
 │   └── models/
 │       ├── __init__.py                 # Model exports (Prophet, XGBoost)
 │       ├── prophet_model.py            # Prophet + Turkish holidays
@@ -279,6 +303,7 @@ Model prediction results with error metrics.
 | forecast_horizon | int | Hours ahead: 24, 48, 168 |
 | predictions | jsonb | [{timestamp, value, lower, upper}] |
 | mape, rmse, mae | float8 | Error metrics |
+| metadata | jsonb | SHAP values (XGBoost only) |
 
 ### model_comparisons
 Per-period evaluation results from rolling forecast windows.
@@ -314,12 +339,14 @@ Per-period evaluation results from rolling forecast windows.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/energy?from=&to=&limit=` | Energy readings with date filters |
+| GET | `/api/energy?from=&to=&limit=` | Energy readings with date filters (paginated) |
 | GET | `/api/forecast?model=` | Forecast by model name |
-| GET | `/api/forecast/compare` | Comparison history |
+| GET | `/api/forecast/compare` | All period comparisons from Supabase |
+| GET | `/api/forecast/latest` | Latest forecast per model from Supabase |
+| GET | `/api/forecast/shap` | SHAP values from forecasts.metadata |
 | POST | `/api/forecast/scenario` | Proxy to ML scenario endpoint |
-| GET | `/api/cron/update-data` | Hourly data ingestion (Vercel Cron) |
-| GET | `/api/cron/run-forecast` | Daily forecast refresh (06:00 UTC) |
+| GET | `/api/cron/update-data` | Hourly EPİAŞ data ingestion (Vercel Cron) |
+| GET | `/api/cron/run-forecast` | Daily forecast + SHAP refresh (Vercel Cron, 06:00 UTC) |
 
 ---
 
@@ -358,15 +385,7 @@ Run migration scripts in Supabase SQL Editor in order:
 004_rls_and_indexes.sql
 ```
 
-### 4. Start Dashboard
-
-```bash
-npm run dev
-```
-
-Dashboard runs at [http://localhost:3000](http://localhost:3000) in **demo mode** with realistic seeded data. Green badge appears when ML API connects.
-
-### 5. ML Pipeline
+### 4. ML Pipeline
 
 ```bash
 cd python
@@ -375,12 +394,37 @@ pip install -r requirements.txt
 # Collect 1 year of EPİAŞ data
 python data_collector.py
 
-# Train models + run 6-period evaluation
+# Train models + run 6-period evaluation + save SHAP to Supabase
 python evaluate.py
 
 # Start API server
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+### 5. Start Dashboard
+
+```bash
+npm run dev
+```
+
+Dashboard runs at [http://localhost:3000](http://localhost:3000). All data is loaded from Supabase — the dashboard works independently of the ML API.
+
+---
+
+## Deployment
+
+### Frontend (Vercel)
+
+The Next.js dashboard deploys to Vercel with automatic GitHub integration. Vercel Cron jobs handle automated data pipeline:
+
+| Cron | Schedule | Description |
+|------|----------|-------------|
+| `/api/cron/update-data` | Every hour (`0 * * * *`) | Fetches latest EPİAŞ data via ML API |
+| `/api/cron/run-forecast` | Daily 06:00 UTC (`0 6 * * *`) | Generates Prophet + XGBoost forecasts |
+
+### ML API (Render)
+
+Python FastAPI deploys to Render free tier with lazy-load model pattern (512 MB RAM). Models are loaded on-demand and freed after each request.
 
 ---
 

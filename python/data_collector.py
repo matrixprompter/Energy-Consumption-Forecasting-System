@@ -223,7 +223,7 @@ def collect_data(start_date: str, end_date: str) -> int:
     Returns:
         Kaydedilen satır sayısı
     """
-    print(f"Veri toplama başlatılıyor: {start_date} → {end_date}")
+    print(f"Veri toplama baslatiliyor: {start_date} -> {end_date}")
 
     # 1. EPİAŞ tüketim verisi
     print("EPİAŞ'tan tüketim verisi çekiliyor...")
