@@ -1,0 +1,28 @@
+# FastAPI
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+pydantic==2.11.3
+
+# Data
+pandas==2.2.3
+numpy==2.2.4
+supabase==2.13.0
+
+# ML Models
+prophet==1.1.6
+xgboost==2.1.4
+scikit-learn==1.6.1
+
+# Explainability
+shap==0.46.0
+
+# Data Sources
+requests==2.32.3
+holidays==0.69
+eptr2
+
+# Model Serialization
+joblib==1.4.2
+
+# Env
+python-dotenv==1.1.0

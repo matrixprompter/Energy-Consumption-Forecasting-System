@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: energy-forecast-api
+    runtime: python
+    region: frankfurt
+    plan: free
+    rootDir: python
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: EPIAS_USERNAME
+        sync: false
+      - key: EPIAS_PASSWORD
+        sync: false
+    healthCheckPath: /health
