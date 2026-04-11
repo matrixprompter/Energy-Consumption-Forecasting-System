@@ -40,7 +40,7 @@ export function KPICards({ avgConsumption, peakHour, bestAccuracy, bestModel }: 
       value: bestModel.toUpperCase(),
       icon: Trophy,
       color: "text-purple-500",
-      tooltip: "MAPE metriğine göre en başarılı tahmin modeli. Prophet, XGBoost ve SARIMA modelleri arasında karşılaştırma yapılır.",
+      tooltip: "MAPE metriğine göre en başarılı tahmin modeli. Prophet ve XGBoost modelleri arasında karşılaştırma yapılır.",
     },
   ];
 

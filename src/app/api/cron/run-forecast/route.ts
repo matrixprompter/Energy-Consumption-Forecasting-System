@@ -5,7 +5,7 @@ const ML_API_URL = process.env.NEXT_PUBLIC_ML_API_URL || "http://localhost:8000"
 export async function GET() {
   const results: Record<string, unknown> = {};
 
-  for (const model of ["prophet", "xgboost", "sarima"]) {
+  for (const model of ["prophet", "xgboost"]) {
     try {
       const res = await fetch(`${ML_API_URL}/forecast`, {
         method: "POST",

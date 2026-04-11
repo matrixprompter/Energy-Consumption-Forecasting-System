@@ -17,16 +17,18 @@ const FeatureImportance = dynamic(() => import("@/components/FeatureImportance")
 const ML_API = process.env.NEXT_PUBLIC_ML_API_URL || "http://localhost:8000";
 
 const PERIOD_OPTIONS = [
+  { value: "live24h", label: "Son 24 Saat" },
+  { value: "1d", label: "1 Gün" },
   { value: "7d", label: "7 Gün" },
-  { value: "30d", label: "30 Gün" },
-  { value: "90d", label: "90 Gün" },
+  { value: "30d", label: "1 Ay" },
+  { value: "90d", label: "3 Ay" },
+  { value: "180d", label: "6 Ay" },
   { value: "1y", label: "1 Yıl" },
 ];
 
 const MODEL_OPTIONS = [
   { value: "xgboost", label: "XGBoost" },
   { value: "prophet", label: "Prophet" },
-  { value: "sarima", label: "SARIMA" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -81,23 +83,25 @@ function generateDemoHeatmap(): number[][] {
 
 function generateDemoTableRows(count: number) {
   const rand = seededRandom(456);
+  const now = new Date();
   return Array.from({ length: count }, (_, i) => {
+    const d = new Date(now.getTime() - (count - i) * 3600000);
     const hourFactor = -Math.cos((i / 24) * Math.PI * 2) * 5000;
     const base = 30000 + hourFactor;
     return {
-      hour: `${String(i % 24).padStart(2, "0")}:00`,
+      hour: `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:00`,
       actual: Math.round(base + (rand() - 0.5) * 1000),
       prophet: Math.round(base + (rand() - 0.5) * 2000),
       xgboost: Math.round(base + (rand() - 0.5) * 1200),
-      sarima: Math.round(base + (rand() - 0.5) * 2500),
     };
   });
 }
 
-const DEMO_METRICS = {
-  prophet: { mape: 4.2, rmse: 1250, mae: 980, r2: 0.92 },
-  xgboost: { mape: 3.8, rmse: 1100, mae: 870, r2: 0.95 },
-  sarima: { mape: 5.1, rmse: 1500, mae: 1150, r2: 0.89 },
+const DEMO_PERIOD_DATA: Record<string, { prophet: { mape: number; rmse: number; mae: number; r2: number }; xgboost: { mape: number; rmse: number; mae: number; r2: number }; winner: string }> = {
+  "1d": { prophet: { mape: 3.5, rmse: 1100, mae: 850, r2: 0.93 }, xgboost: { mape: 2.8, rmse: 900, mae: 700, r2: 0.96 }, winner: "xgboost" },
+  "7d": { prophet: { mape: 4.2, rmse: 1250, mae: 980, r2: 0.92 }, xgboost: { mape: 3.8, rmse: 1100, mae: 870, r2: 0.95 }, winner: "xgboost" },
+  "30d": { prophet: { mape: 5.1, rmse: 1400, mae: 1100, r2: 0.90 }, xgboost: { mape: 3.9, rmse: 1150, mae: 900, r2: 0.94 }, winner: "xgboost" },
+  "90d": { prophet: { mape: 6.8, rmse: 1800, mae: 1400, r2: 0.85 }, xgboost: { mape: 4.2, rmse: 1200, mae: 950, r2: 0.93 }, winner: "xgboost" },
 };
 
 const DEMO_FEATURES = [
@@ -182,18 +186,20 @@ function buildHeatmapFromReadings(readings: EnergyReading[]): number[][] {
 
 function buildTableRows(
   sorted: EnergyReading[],
-  allPreds: { prophet: number[]; xgboost: number[]; sarima: number[] },
+  allPreds: { prophet: number[]; xgboost: number[] },
 ) {
-  const last24 = sorted.slice(-24);
+  // Son 24 saati tahminlerle eşleştir, geri kalanı sadece gerçek veri olarak döndür
+  const last24Start = Math.max(0, sorted.length - 24);
 
-  return last24.map((r, i) => {
+  return sorted.map((r, i) => {
     const d = new Date(r.timestamp);
+    const predIdx = i - last24Start;
+    const hasPred = predIdx >= 0 && predIdx < 24;
     return {
-      hour: `${String(d.getHours()).padStart(2, "0")}:00`,
+      hour: `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:00`,
       actual: Math.round(r.consumption_mwh),
-      prophet: Math.round(allPreds.prophet[i] ?? r.consumption_mwh),
-      xgboost: Math.round(allPreds.xgboost[i] ?? r.consumption_mwh),
-      sarima: Math.round(allPreds.sarima[i] ?? r.consumption_mwh),
+      prophet: hasPred ? Math.round(allPreds.prophet[predIdx] ?? r.consumption_mwh) : Math.round(r.consumption_mwh),
+      xgboost: hasPred ? Math.round(allPreds.xgboost[predIdx] ?? r.consumption_mwh) : Math.round(r.consumption_mwh),
     };
   });
 }
@@ -210,29 +216,31 @@ interface TimelineData {
 }
 
 export default function DashboardPage() {
-  const [period, setPeriod] = useState("7d");
+  const [period, setPeriod] = useState("live24h");
   const [model, setModel] = useState("xgboost");
   const [apiAvailable, setApiAvailable] = useState(false);
-  const [comparison, setComparison] = useState(DEMO_METRICS);
+  const [periodData, setPeriodData] = useState(DEMO_PERIOD_DATA);
   const [features, setFeatures] = useState(DEMO_FEATURES);
-  const [winner, setWinner] = useState("xgboost");
   const [initialLoading, setInitialLoading] = useState(true);
 
   const [timeline, setTimeline] = useState<TimelineData | null>(null);
   const [heatmap, setHeatmap] = useState<number[][] | null>(null);
   const [tableRows, setTableRows] = useState<Array<{
-    hour: string; actual: number; prophet: number; xgboost: number; sarima: number;
+    hour: string; actual: number; prophet: number; xgboost: number;
   }> | null>(null);
+  const [tablePeriod, setTablePeriod] = useState("live24h");
 
   // Cache — enerji verisi period bazlı, tahminler ayrı
   const readingsRef = useRef<{ periodKey: string; sorted: EnergyReading[] }>({ periodKey: "", sorted: [] });
-  const tablePredsRef = useRef<{ prophet: number[]; xgboost: number[]; sarima: number[] }>({
-    prophet: [], xgboost: [], sarima: [],
+  const tablePredsRef = useRef<{ prophet: number[]; xgboost: number[] }>({
+    prophet: [], xgboost: [],
   });
+  const tableReadingsRef = useRef<{ periodKey: string; sorted: EnergyReading[] }>({ periodKey: "", sorted: [] });
   // readingsVersion: useEffect #2 veriyi yükleyince artırılır, useEffect #3'ü tetikler
   const [readingsVersion, setReadingsVersion] = useState(0);
 
-  const periodDays = period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : 365;
+  const periodDays = period === "live24h" ? 1 : period === "1d" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : period === "180d" ? 180 : 365;
+  const tablePeriodDays = tablePeriod === "live24h" ? 1 : tablePeriod === "1d" ? 1 : tablePeriod === "7d" ? 7 : tablePeriod === "30d" ? 30 : tablePeriod === "90d" ? 90 : tablePeriod === "180d" ? 180 : 365;
 
   // ── 1) Başlangıç: ML API kontrol + karşılaştırma + SHAP ──
   useEffect(() => {
@@ -243,18 +251,15 @@ export default function DashboardPage() {
         setApiAvailable(true);
 
         const [compRes, shapRes] = await Promise.all([
-          fetch(`${ML_API}/model-comparison`),
+          fetch(`${ML_API}/model-comparison/all`),
           fetch(`${ML_API}/feature-importance`),
         ]);
 
         if (compRes.ok) {
           const data = await compRes.json();
-          setComparison({
-            prophet: data.prophet || DEMO_METRICS.prophet,
-            xgboost: data.xgboost || DEMO_METRICS.xgboost,
-            sarima: data.sarima || DEMO_METRICS.sarima,
-          });
-          setWinner(data.winner || "xgboost");
+          if (Object.keys(data).length > 0) {
+            setPeriodData(data);
+          }
         }
 
         if (shapRes.ok) {
@@ -309,7 +314,6 @@ export default function DashboardPage() {
         const cappedDays = periodDays > 30 ? 30 : periodDays;
         setTimeline(generateDemoTimeline(cappedDays));
         setHeatmap(generateDemoHeatmap());
-        setTableRows(generateDemoTableRows(24));
         setInitialLoading(false);
         return;
       }
@@ -317,9 +321,9 @@ export default function DashboardPage() {
       // Heatmap (model bağımsız)
       setHeatmap(buildHeatmapFromReadings(sorted));
 
-      // 3 model tahminini paralel çek (tablo için)
+      // Model tahminlerini çek (tablo + KPI için sadece 24h preds ref'e kaydet)
       try {
-        const [pRes, xRes, sRes] = await Promise.all([
+        const [pRes, xRes] = await Promise.all([
           fetch(`${ML_API}/forecast`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -330,26 +334,17 @@ export default function DashboardPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ model: "xgboost", horizon: 24, region: "TR" }),
           }),
-          fetch(`${ML_API}/forecast`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: "sarima", horizon: 24, region: "TR" }),
-          }),
         ]);
 
-        const preds = { prophet: [] as number[], xgboost: [] as number[], sarima: [] as number[] };
+        const preds = { prophet: [] as number[], xgboost: [] as number[] };
         if (pRes.ok) preds.prophet = (await pRes.json()).predictions.map((p: { value: number }) => p.value);
         if (xRes.ok) preds.xgboost = (await xRes.json()).predictions.map((p: { value: number }) => p.value);
-        if (sRes.ok) preds.sarima = (await sRes.json()).predictions.map((p: { value: number }) => p.value);
 
         if (!cancelled) {
           tablePredsRef.current = preds;
-          setTableRows(buildTableRows(sorted, preds));
         }
       } catch {
-        if (!cancelled) {
-          setTableRows(buildTableRows(sorted, { prophet: [], xgboost: [], sarima: [] }));
-        }
+        // tahminler alınamazsa boş kalır
       }
 
       setInitialLoading(false);
@@ -390,6 +385,61 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, periodDays, readingsVersion]);
 
+  // ── 4) Tablo periyodu değiştiğinde → tablo verisi bağımsız yüklenir ──
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTableData() {
+      const tpKey = `${tablePeriodDays}`;
+
+      // Eğer ana periyot cache'i aynı veya daha büyükse onu kullan
+      const mainSorted = readingsRef.current.sorted;
+      if (mainSorted.length > 0 && mainSorted.length >= tablePeriodDays * 24) {
+        const sliced = mainSorted.slice(-tablePeriodDays * 24);
+        if (!cancelled) setTableRows(buildTableRows(sliced, tablePredsRef.current));
+        return;
+      }
+
+      // Tablo cache kontrolü
+      if (tableReadingsRef.current.periodKey === tpKey && tableReadingsRef.current.sorted.length > 0) {
+        if (!cancelled) setTableRows(buildTableRows(tableReadingsRef.current.sorted, tablePredsRef.current));
+        return;
+      }
+
+      // Supabase'den veri çek
+      try {
+        const now = new Date();
+        const from = new Date(now.getTime() - tablePeriodDays * 24 * 3600000);
+        const res = await fetch(
+          `/api/energy?from=${from.toISOString()}&to=${now.toISOString()}&limit=${tablePeriodDays * 24}`
+        );
+        if (!res.ok) {
+          if (!cancelled) setTableRows(generateDemoTableRows(tablePeriodDays * 24 > 720 ? 720 : tablePeriodDays * 24));
+          return;
+        }
+        const data = await res.json();
+        const readings: EnergyReading[] = data.data || [];
+        const sorted = sortReadings(readings);
+
+        if (sorted.length === 0) {
+          if (!cancelled) setTableRows(generateDemoTableRows(tablePeriodDays * 24 > 720 ? 720 : tablePeriodDays * 24));
+          return;
+        }
+
+        if (!cancelled) {
+          tableReadingsRef.current = { periodKey: tpKey, sorted };
+          setTableRows(buildTableRows(sorted, tablePredsRef.current));
+        }
+      } catch {
+        if (!cancelled) setTableRows(generateDemoTableRows(tablePeriodDays * 24 > 720 ? 720 : tablePeriodDays * 24));
+      }
+    }
+
+    loadTableData();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tablePeriod, tablePeriodDays, readingsVersion]);
+
   // İlk yükleme
   if (initialLoading && !timeline) {
     return (
@@ -402,9 +452,10 @@ export default function DashboardPage() {
   // Son 24 saat tablosundan model metriklerini hesapla
   const tableMetrics = tableRows
     ? (() => {
+        const last24Rows = tableRows.slice(-24);
         function computeModelMetrics(
-          rows: Array<{ actual: number; prophet: number; xgboost: number; sarima: number }>,
-          modelKey: "prophet" | "xgboost" | "sarima",
+          rows: Array<{ actual: number; prophet: number; xgboost: number }>,
+          modelKey: "prophet" | "xgboost",
         ) {
           const n = rows.length;
           if (n === 0) return { mape: 0, rmse: 0, mae: 0, r2: 0 };
@@ -436,12 +487,11 @@ export default function DashboardPage() {
           };
         }
 
-        const p = computeModelMetrics(tableRows, "prophet");
-        const x = computeModelMetrics(tableRows, "xgboost");
-        const s = computeModelMetrics(tableRows, "sarima");
-        const minMape = Math.min(p.mape, x.mape, s.mape);
-        const w = p.mape === minMape ? "prophet" : x.mape === minMape ? "xgboost" : "sarima";
-        return { prophet: p, xgboost: x, sarima: s, winner: w };
+        const p = computeModelMetrics(last24Rows, "prophet");
+        const x = computeModelMetrics(last24Rows, "xgboost");
+        const minMape = Math.min(p.mape, x.mape);
+        const w = p.mape === minMape ? "prophet" : "xgboost";
+        return { prophet: p, xgboost: x, winner: w };
       })()
     : null;
 
@@ -451,15 +501,22 @@ export default function DashboardPage() {
   const tr = tableRows ?? generateDemoTableRows(24);
 
   // KPI: tablo verisi varsa son 24 saatten hesapla, yoksa timeline'dan
-  const kpiSource = tr;
+  const kpiSource = tr.slice(-24);
   const avgConsumption = kpiSource.reduce((a, b) => a + b.actual, 0) / kpiSource.length;
   const peakRow = kpiSource.reduce((best, row) => (row.actual > best.actual ? row : best), kpiSource[0]);
   const peakHour = parseInt(peakRow?.hour ?? "0", 10);
-  const bestMape = Math.min(comparison.prophet.mape, comparison.xgboost.mape, comparison.sarima.mape);
-  const kpiWinner = tableMetrics ? tableMetrics.winner : winner;
-  const kpiBestMape = tableMetrics
-    ? Math.min(tableMetrics.prophet.mape, tableMetrics.xgboost.mape, tableMetrics.sarima.mape)
-    : bestMape;
+
+  // Aktif periyoda göre KPI metrikleri belirle
+  const isLive = period === "live24h";
+  const activePeriod = isLive ? null : (periodData[period] || periodData["7d"] || Object.values(periodData)[0]);
+  const kpiWinner = isLive
+    ? (tableMetrics ? tableMetrics.winner : "xgboost")
+    : (activePeriod?.winner || "xgboost");
+  const kpiBestMape = isLive
+    ? (tableMetrics ? Math.min(tableMetrics.prophet.mape, tableMetrics.xgboost.mape) : 0)
+    : activePeriod
+      ? Math.min(activePeriod.prophet.mape, activePeriod.xgboost.mape)
+      : 0;
 
   return (
     <div id="dashboard-content" className="space-y-4 overflow-hidden sm:space-y-6">
@@ -502,10 +559,7 @@ export default function DashboardPage() {
       {/* Model Karşılaştırma + Özellik Önemi */}
       <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
         <ModelComparison
-          prophet={comparison.prophet}
-          xgboost={comparison.xgboost}
-          sarima={comparison.sarima}
-          winner={winner}
+          periodData={periodData}
           tableMetrics={tableMetrics}
         />
         <FeatureImportance features={features} />
@@ -519,12 +573,16 @@ export default function DashboardPage() {
         <ScenarioAnalysis />
         <ExportPanel
           forecastData={tr}
-          modelMetrics={comparison}
+          modelMetrics={(() => {
+            const pd = (period === "live24h" ? tableMetrics : periodData[period]) || periodData["7d"];
+            if (!pd) return {} as Record<string, Record<string, number>>;
+            return { prophet: pd.prophet, xgboost: pd.xgboost } as Record<string, Record<string, number>>;
+          })()}
         />
       </div>
 
       {/* Tahmin Tablosu */}
-      <ForecastTable rows={tr} />
+      <ForecastTable rows={tr} period={tablePeriod} onPeriodChange={setTablePeriod} />
     </div>
   );
 }

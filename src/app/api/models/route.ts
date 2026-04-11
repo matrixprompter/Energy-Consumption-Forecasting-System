@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export async function GET() {
   const supabase = createAdminClient();
 
-  const models = ["prophet", "xgboost", "sarima"];
+  const models = ["prophet", "xgboost"];
   const results = [];
 
   for (const model of models) {

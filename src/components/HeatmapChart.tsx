@@ -88,12 +88,12 @@ export function HeatmapChart({ data, dayLabels = DEFAULT_DAYS }: HeatmapChartPro
                         <div
                           className="rounded-sm px-0.5 py-1 text-[8px] leading-none sm:px-1 sm:py-1.5 sm:text-[10px]"
                           style={{
-                            backgroundColor: getColor(val, min, max),
-                            color: getTextColor(val, min, max),
+                            backgroundColor: val === 0 ? "rgb(240,240,240)" : getColor(val, min, max),
+                            color: val === 0 ? "rgb(160,160,160)" : getTextColor(val, min, max),
                             outline: isPeak ? "2px solid rgb(220, 38, 38)" : "none",
                           }}
                         >
-                          {(val / 1000).toFixed(1)}k
+                          {val === 0 ? "-" : `${(val / 1000).toFixed(1)}k`}
                         </div>
                       </td>
                     );

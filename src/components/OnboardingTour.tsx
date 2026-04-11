@@ -32,7 +32,7 @@ const STEPS: TourStep[] = [
     target: "model-comparison",
     title: "Model Karşılaştırma",
     description:
-      "Prophet, XGBoost ve SARIMA modellerinin MAPE, RMSE, MAE ve R² skorlarını karşılaştırır. Yeşil çubuk her metrikte en iyi modeli vurgular.",
+      "Prophet ve XGBoost modellerinin MAPE, RMSE, MAE ve R² skorlarını karşılaştırır. Yeşil çubuk her metrikte en iyi modeli vurgular.",
   },
   {
     target: "feature-importance",

@@ -25,7 +25,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {children}
         </main>
         <footer className="border-t py-4 text-center text-xs text-muted-foreground sm:text-sm">
-          Prophet &middot; XGBoost &middot; SARIMA — Enerji Tahmin Sistemi
+          Prophet &middot; XGBoost — Enerji Tüketim Tahmin Sistemi
         </footer>
       </div>
     </ThemeProvider>

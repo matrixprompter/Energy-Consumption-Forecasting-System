@@ -48,7 +48,7 @@ export type Database = {
         Row: {
           id: string;
           created_at: string;
-          model_name: "prophet" | "xgboost" | "sarima";
+          model_name: "prophet" | "xgboost";
           forecast_horizon: number;
           predictions: ForecastPrediction[];
           mape: number | null;
@@ -60,7 +60,7 @@ export type Database = {
         Insert: {
           id?: string;
           created_at?: string;
-          model_name: "prophet" | "xgboost" | "sarima";
+          model_name: "prophet" | "xgboost";
           forecast_horizon: number;
           predictions: ForecastPrediction[];
           mape?: number | null;
@@ -72,7 +72,7 @@ export type Database = {
         Update: {
           id?: string;
           created_at?: string;
-          model_name?: "prophet" | "xgboost" | "sarima";
+          model_name?: "prophet" | "xgboost";
           forecast_horizon?: number;
           predictions?: ForecastPrediction[];
           mape?: number | null;
@@ -89,7 +89,7 @@ export type Database = {
           prophet_mape: number;
           xgboost_mape: number;
           sarima_mape: number;
-          winner: "prophet" | "xgboost" | "sarima";
+          winner: "prophet" | "xgboost";
           dataset_period: string | null;
           notes: string | null;
         };
@@ -99,7 +99,7 @@ export type Database = {
           prophet_mape: number;
           xgboost_mape: number;
           sarima_mape: number;
-          winner: "prophet" | "xgboost" | "sarima";
+          winner: "prophet" | "xgboost";
           dataset_period?: string | null;
           notes?: string | null;
         };
@@ -109,7 +109,7 @@ export type Database = {
           prophet_mape?: number;
           xgboost_mape?: number;
           sarima_mape?: number;
-          winner?: "prophet" | "xgboost" | "sarima";
+          winner?: "prophet" | "xgboost";
           dataset_period?: string | null;
           notes?: string | null;
         };
@@ -133,4 +133,4 @@ export type Forecast = Database["public"]["Tables"]["forecasts"]["Row"];
 export type ForecastInsert = Database["public"]["Tables"]["forecasts"]["Insert"];
 export type ModelComparison = Database["public"]["Tables"]["model_comparisons"]["Row"];
 export type ModelComparisonInsert = Database["public"]["Tables"]["model_comparisons"]["Insert"];
-export type ModelName = "prophet" | "xgboost" | "sarima";
+export type ModelName = "prophet" | "xgboost";

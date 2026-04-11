@@ -1,9 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Bar } from "react-chartjs-2";
-import type { ChartData, ChartOptions } from "chart.js";
-import "@/lib/chart-setup";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 
@@ -14,89 +11,103 @@ export interface ModelMetrics {
   r2: number;
 }
 
-interface ModelComparisonProps {
+export interface PeriodComparison {
   prophet: ModelMetrics;
   xgboost: ModelMetrics;
-  sarima: ModelMetrics;
   winner: string;
-  /** Son 24 saat tablo verisinden hesaplanan metrikler (opsiyonel) */
-  tableMetrics?: {
-    prophet: ModelMetrics;
-    xgboost: ModelMetrics;
-    sarima: ModelMetrics;
-    winner: string;
-  } | null;
 }
 
-const METRIC_LABELS = ["MAPE (%)", "RMSE", "MAE", "R\u00B2"];
-const METRIC_KEYS: (keyof ModelMetrics)[] = ["mape", "rmse", "mae", "r2"];
+interface ModelComparisonProps {
+  periodData: Record<string, PeriodComparison>;
+  tableMetrics?: PeriodComparison | null;
+}
+
+const METRICS = [
+  {
+    key: "mape" as const,
+    label: "MAPE (%)",
+    desc: "Ortalama Mutlak Yuzde Hata — dusuk = iyi",
+    lower: true,
+    fmt: (v: number) => `${v.toFixed(2)}%`,
+  },
+  {
+    key: "rmse" as const,
+    label: "RMSE",
+    desc: "Kok Ortalama Kare Hata — buyuk sapmalara duyarli, dusuk = iyi",
+    lower: true,
+    fmt: (v: number) => v.toLocaleString("tr-TR", { maximumFractionDigits: 0 }),
+  },
+  {
+    key: "mae" as const,
+    label: "MAE",
+    desc: "Ortalama Mutlak Hata — ortalama sapma buyuklugu, dusuk = iyi",
+    lower: true,
+    fmt: (v: number) => v.toLocaleString("tr-TR", { maximumFractionDigits: 0 }),
+  },
+  {
+    key: "r2" as const,
+    label: "R\u00B2",
+    desc: "Belirleme katsayisi — modelin veriyi ne kadar aciklayabildigini gosterir, 1'e yakin = iyi",
+    lower: false,
+    fmt: (v: number) => v.toFixed(4),
+  },
+];
 
 const PERIOD_TABS = [
-  { key: "24h", label: "Son 24 Saat" },
-  { key: "general", label: "Genel (7 Gün)" },
+  { key: "live24h", label: "Son 24 Saat" },
+  { key: "1d", label: "1 Gün" },
+  { key: "7d", label: "7 Gün" },
+  { key: "30d", label: "1 Ay" },
+  { key: "90d", label: "3 Ay" },
+  { key: "180d", label: "6 Ay" },
+  { key: "1y", label: "1 Yıl" },
 ] as const;
 
 type PeriodTab = (typeof PERIOD_TABS)[number]["key"];
 
-function getBestIndex(values: number[], metric: string): number {
-  if (metric === "r2") return values.indexOf(Math.max(...values));
-  return values.indexOf(Math.min(...values));
-}
-
 export function ModelComparison({
-  prophet,
-  xgboost,
-  sarima,
-  winner,
+  periodData,
   tableMetrics,
 }: ModelComparisonProps) {
-  const [tab, setTab] = useState<PeriodTab>(tableMetrics ? "24h" : "general");
+  const defaultTab: PeriodTab = tableMetrics
+    ? "live24h"
+    : (Object.keys(periodData)[0] as PeriodTab) || "7d";
+  const [tab, setTab] = useState<PeriodTab>(defaultTab);
 
-  const is24h = tab === "24h" && tableMetrics;
-  const currentProphet = is24h ? tableMetrics.prophet : prophet;
-  const currentXgboost = is24h ? tableMetrics.xgboost : xgboost;
-  const currentSarima = is24h ? tableMetrics.sarima : sarima;
-  const currentWinner = is24h ? tableMetrics.winner : winner;
+  let currentData: PeriodComparison | null = null;
+  if (tab === "live24h") {
+    currentData = tableMetrics || null;
+  } else {
+    currentData = periodData[tab] || null;
+  }
 
-  const models = [currentProphet, currentXgboost, currentSarima];
-  const modelNames = ["Prophet", "XGBoost", "SARIMA"];
-  const baseColors = ["rgba(249,115,22,0.8)", "rgba(34,197,94,0.8)", "rgba(239,68,68,0.8)"];
-  const greenHighlight = "rgba(22,163,74,0.9)";
+  if (!currentData) {
+    const firstKey = Object.keys(periodData)[0];
+    currentData = firstKey ? periodData[firstKey] : null;
+  }
 
-  const datasets = modelNames.map((name, mIdx) => ({
-    label: name,
-    data: METRIC_KEYS.map((k) => models[mIdx][k]),
-    backgroundColor: METRIC_KEYS.map((_, kIdx) => {
-      const values = models.map((m) => m[METRIC_KEYS[kIdx]]);
-      const best = getBestIndex(values, METRIC_KEYS[kIdx]);
-      return best === mIdx ? greenHighlight : baseColors[mIdx];
-    }),
-    borderRadius: 4,
-  }));
+  if (!currentData) {
+    return (
+      <Card data-onboarding="model-comparison">
+        <CardContent className="flex h-40 items-center justify-center text-muted-foreground">
+          Model karsilastirma verisi bulunamadi
+        </CardContent>
+      </Card>
+    );
+  }
 
-  const data: ChartData<"bar"> = { labels: METRIC_LABELS, datasets };
-
-  const options: ChartOptions<"bar"> = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { position: "top" },
-      tooltip: {
-        callbacks: {
-          label: (ctx) => `${ctx.dataset.label}: ${Number(ctx.parsed.y).toFixed(2)}`,
-        },
-      },
-    },
-    scales: { y: { beginAtZero: true } },
-  };
+  const models = { prophet: currentData.prophet, xgboost: currentData.xgboost };
+  const currentWinner = currentData.winner;
+  const hasR2 = models.prophet.r2 !== undefined && models.xgboost.r2 !== undefined;
+  const visibleMetrics = hasR2 ? METRICS : METRICS.filter((m) => m.key !== "r2");
 
   return (
     <Card data-onboarding="model-comparison">
       <CardHeader className="px-4 pb-2 sm:px-6">
         <CardTitle className="flex flex-col gap-1 text-base sm:text-lg">
           <span className="flex items-center gap-2">
-            Model Karşılaştırma
-            <InfoTooltip text="Prophet, XGBoost ve SARIMA modellerinin performans metriklerini karşılaştırır. 'Son 24 Saat' sekmesi tablodaki son 24 saatlik gerçek vs tahmin verisinden hesaplanır. 'Genel (7 Gün)' sekmesi eğitim sonrası 7 günlük test penceresinden hesaplanır." />
+            Model Karsilastirma
+            <InfoTooltip text="Prophet ve XGBoost modellerinin farkli zaman periyotlarindaki performansini karsilastirir. Yesil arka plan her metrikte en iyi degeri vurgular. MAPE, RMSE, MAE dusuk olmasi iyidir; R2 yuksek olmasi iyidir." />
           </span>
           <div className="flex items-center gap-2">
             <span className="text-xs font-normal text-muted-foreground sm:text-sm">
@@ -104,16 +115,17 @@ export function ModelComparison({
             </span>
           </div>
         </CardTitle>
-        {/* Period tabs */}
-        <div className="flex gap-1 pt-1">
+        <div className="flex flex-wrap gap-1 pt-1">
           {PERIOD_TABS.map((t) => {
-            const disabled = t.key === "24h" && !tableMetrics;
+            const disabled =
+              (t.key === "live24h" && !tableMetrics) ||
+              (t.key !== "live24h" && !periodData[t.key]);
             return (
               <button
                 key={t.key}
                 disabled={disabled}
                 onClick={() => !disabled && setTab(t.key)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors sm:px-3 sm:text-xs ${
                   tab === t.key
                     ? "bg-primary text-primary-foreground"
                     : disabled
@@ -127,9 +139,57 @@ export function ModelComparison({
           })}
         </div>
       </CardHeader>
-      <CardContent className="px-2 sm:px-6">
-        <div className="h-[250px] sm:h-[300px] lg:h-[350px]">
-          <Bar data={data} options={options} />
+      <CardContent className="px-4 sm:px-6">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs sm:text-sm">
+            <thead>
+              <tr className="border-b text-left text-muted-foreground">
+                <th className="p-2 font-medium sm:p-3">Metrik</th>
+                <th className="p-2 text-right font-medium sm:p-3">Prophet</th>
+                <th className="p-2 text-right font-medium sm:p-3">XGBoost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleMetrics.map((metric) => {
+                const pVal = models.prophet[metric.key] ?? 0;
+                const xVal = models.xgboost[metric.key] ?? 0;
+                const pBest = metric.lower ? pVal <= xVal : pVal >= xVal;
+                const xBest = metric.lower ? xVal <= pVal : xVal >= pVal;
+
+                return (
+                  <tr key={metric.key} className="border-b last:border-0 h-11">
+                    <td className="p-2 py-3 sm:p-3">
+                      <div className="flex items-center gap-1">
+                        <span className="font-medium">{metric.label}</span>
+                        <InfoTooltip text={metric.desc} />
+                      </div>
+                    </td>
+                    <td className={`p-2 text-right font-mono sm:p-3 ${pBest ? "bg-green-50 font-semibold text-green-700 dark:bg-green-950/30 dark:text-green-400" : "bg-red-50 text-red-600 dark:bg-red-950/20 dark:text-red-400"}`}>
+                      {metric.fmt(pVal)}
+                    </td>
+                    <td className={`p-2 text-right font-mono sm:p-3 ${xBest ? "bg-green-50 font-semibold text-green-700 dark:bg-green-950/30 dark:text-green-400" : "bg-red-50 text-red-600 dark:bg-red-950/20 dark:text-red-400"}`}>
+                      {metric.fmt(xVal)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-4 space-y-3 border-t pt-3">
+          <div className="flex items-center gap-3 text-[10px] text-muted-foreground sm:text-xs">
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded-sm bg-green-50 border border-green-200 dark:bg-green-950/30 dark:border-green-800" />
+              Kazanan (en iyi deger)
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded-sm bg-red-50 border border-red-200 dark:bg-red-950/20 dark:border-red-800" />
+              Kaybeden
+            </span>
+          </div>
+          <p className="text-[10px] leading-relaxed text-muted-foreground sm:text-xs">
+            Degerlendirme, secilen periyottaki tum saatlik veriler uzerinde kayar pencere (rolling 24-step forecast) yontemiyle yapilir. Her adimda model sadece gecmis veriyi gorup sonraki 24 saati tahmin eder; boylece gercek zamana yakin bir test ortami olusturulur. MAPE ve MAE mutlak sapmayi, RMSE buyuk hatalara duyarliligi, R² ise modelin toplam varyansi aciklama oranini olcer. Dusuk MAPE/RMSE/MAE ve yuksek R² daha iyi performans gosterir.
+          </p>
         </div>
       </CardContent>
     </Card>

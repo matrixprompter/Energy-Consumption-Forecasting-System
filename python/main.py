@@ -6,7 +6,7 @@ GET /feature-importance, POST /update-data, GET /health
 Lazy-Load Stratejisi (Render Free Tier — 512 MB RAM):
   - Modeller istek geldiğinde yüklenir (joblib.load)
   - İşlem bitince bellekten atılır (del + gc.collect)
-  - 3 model aynı anda bellekte durmaz
+  - 2 model aynı anda bellekte durmaz
 """
 
 import gc
@@ -32,7 +32,6 @@ MODELS_DIR = Path(__file__).parent / "models" / "saved"
 MODEL_PATHS = {
     "prophet": MODELS_DIR / "prophet_model.pkl",
     "xgboost": MODELS_DIR / "xgboost_model.pkl",
-    "sarima": MODELS_DIR / "sarima_model.pkl",
 }
 
 
@@ -73,7 +72,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="Enerji Tüketim Tahmin API",
-    description="Prophet, XGBoost ve SARIMA modelleri ile saatlik enerji tüketim tahmini (Lazy-Load)",
+    description="Prophet ve XGBoost modelleri ile saatlik enerji tüketim tahmini (Lazy-Load)",
     version="1.1.0",
 )
 
@@ -90,7 +89,7 @@ app.add_middleware(
 # Pydantic Modelleri
 # ---------------------------------------------------------------------------
 class ForecastRequest(BaseModel):
-    model: str = "xgboost"  # prophet / xgboost / sarima
+    model: str = "xgboost"  # prophet / xgboost
     horizon: int = 24  # 24 / 48 / 168
     region: str = "TR"
 
@@ -123,7 +122,7 @@ async def health():
 @app.post("/forecast")
 async def forecast(req: ForecastRequest) -> dict[str, Any]:
     """Zaman serisi tahmini üretir (model lazy-load ile yüklenir)."""
-    if req.model not in ("prophet", "xgboost", "sarima"):
+    if req.model not in ("prophet", "xgboost"):
         raise HTTPException(400, f"Geçersiz model: {req.model}")
 
     if req.model not in get_available_models():
@@ -137,24 +136,6 @@ async def forecast(req: ForecastRequest) -> dict[str, Any]:
             if req.model == "prophet":
                 # ProphetForecaster instance — predict(horizon) doğrudan çalışır
                 predictions = model.predict(horizon=req.horizon)
-
-            elif req.model == "sarima":
-                # SARIMA pkl dict olarak kaydedildi — model_results içinden tahmin yap
-                if isinstance(model, dict):
-                    sarima_results = model["model_results"]
-                    forecast = sarima_results.get_forecast(steps=req.horizon)
-                    mean = forecast.predicted_mean
-                    conf = forecast.conf_int(alpha=0.05)
-                    predictions = []
-                    for i in range(req.horizon):
-                        predictions.append({
-                            "timestamp": str(mean.index[i]) if hasattr(mean.index[i], '__str__') else "",
-                            "value": round(float(mean.iloc[i]), 2),
-                            "lower": round(float(conf.iloc[i, 0]), 2),
-                            "upper": round(float(conf.iloc[i, 1]), 2),
-                        })
-                else:
-                    predictions = model.predict(horizon=req.horizon)
 
             else:
                 # XGBoost — son verilerden özellik üret, her adımda güncelle
@@ -266,42 +247,101 @@ async def latest_forecast(
 
 
 @app.get("/model-comparison")
-async def model_comparison() -> dict[str, Any]:
-    """3 modelin metrik karşılaştırması."""
+async def model_comparison(
+    period: str = Query(default="7d"),
+) -> dict[str, Any]:
+    """Periyot bazlı model karşılaştırması (1d, 7d, 30d, 90d, 180d, 1y)."""
+    import json as _json
+
+    # Belirli periyot için en son karşılaştırmayı getir
     response = (
         supabase.table("model_comparisons")
         .select("*")
+        .eq("dataset_period", period)
         .order("run_at", desc=True)
         .limit(1)
         .execute()
     )
 
     if not response.data:
-        raise HTTPException(404, "Henüz model karşılaştırması yapılmamış.")
-
-    row = response.data[0]
-
-    result: dict[str, Any] = {}
-    for model_name in ["prophet", "xgboost", "sarima"]:
-        f_resp = (
-            supabase.table("forecasts")
-            .select("mape, rmse, mae")
-            .eq("model_name", model_name)
-            .order("created_at", desc=True)
+        # Fallback: periyot filtresi olmadan en son kaydı dene
+        response = (
+            supabase.table("model_comparisons")
+            .select("*")
+            .order("run_at", desc=True)
             .limit(1)
             .execute()
         )
-        if f_resp.data:
-            result[model_name] = f_resp.data[0]
+        if not response.data:
+            raise HTTPException(404, "Henüz model karşılaştırması yapılmamış.")
+
+    row = response.data[0]
+
+    notes_metrics: dict[str, Any] = {}
+    if row.get("notes"):
+        try:
+            notes_metrics = _json.loads(row["notes"])
+        except (ValueError, TypeError):
+            pass
+
+    result: dict[str, Any] = {}
+    for model_name in ["prophet", "xgboost"]:
+        if model_name in notes_metrics:
+            result[model_name] = notes_metrics[model_name]
         else:
             result[model_name] = {
                 "mape": row.get(f"{model_name}_mape"),
                 "rmse": None,
                 "mae": None,
+                "r2": None,
             }
 
     result["winner"] = row["winner"]
+    result["period"] = row.get("dataset_period", period)
     return result
+
+
+@app.get("/model-comparison/all")
+async def model_comparison_all() -> dict[str, Any]:
+    """Tüm periyotlar için model karşılaştırması."""
+    import json as _json
+
+    periods = ["1d", "7d", "30d", "90d", "180d", "1y"]
+    all_results: dict[str, Any] = {}
+
+    for p in periods:
+        response = (
+            supabase.table("model_comparisons")
+            .select("*")
+            .eq("dataset_period", p)
+            .order("run_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not response.data:
+            continue
+
+        row = response.data[0]
+        notes_metrics: dict[str, Any] = {}
+        if row.get("notes"):
+            try:
+                notes_metrics = _json.loads(row["notes"])
+            except (ValueError, TypeError):
+                pass
+
+        period_result: dict[str, Any] = {}
+        for model_name in ["prophet", "xgboost"]:
+            if model_name in notes_metrics:
+                period_result[model_name] = notes_metrics[model_name]
+            else:
+                period_result[model_name] = {
+                    "mape": row.get(f"{model_name}_mape"),
+                    "rmse": None, "mae": None, "r2": None,
+                }
+        period_result["winner"] = row["winner"]
+        all_results[p] = period_result
+
+    return all_results
 
 
 @app.get("/feature-importance")

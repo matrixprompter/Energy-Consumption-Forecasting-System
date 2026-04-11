@@ -11,11 +11,12 @@ interface ForecastRow {
   actual: number;
   prophet: number;
   xgboost: number;
-  sarima: number;
 }
 
 interface ForecastTableProps {
   rows: ForecastRow[];
+  period: string;
+  onPeriodChange: (period: string) => void;
 }
 
 function errorPercent(actual: number, predicted: number): number {
@@ -35,23 +36,32 @@ function errorBg(pct: number): string {
   return "bg-red-50 dark:bg-red-950/30";
 }
 
-export function ForecastTable({ rows }: ForecastTableProps) {
+const TABLE_PERIODS = [
+  { key: "live24h", label: "Son 24 Saat" },
+  { key: "1d", label: "1 Gün" },
+  { key: "7d", label: "7 Gün" },
+  { key: "30d", label: "1 Ay" },
+  { key: "90d", label: "3 Ay" },
+  { key: "180d", label: "6 Ay" },
+  { key: "1y", label: "1 Yıl" },
+] as const;
+
+export function ForecastTable({ rows, period, onPeriodChange }: ForecastTableProps) {
   const exportCSV = useCallback(() => {
-    const header = "Saat,Gerçek,Prophet,XGBoost,SARIMA,Prophet Hata %,XGBoost Hata %,SARIMA Hata %\n";
+    const header = "Saat,Gerçek,Prophet,XGBoost,Prophet Hata %,XGBoost Hata %\n";
     const csvRows = rows.map((r) => {
       const pe = errorPercent(r.actual, r.prophet).toFixed(1);
       const xe = errorPercent(r.actual, r.xgboost).toFixed(1);
-      const se = errorPercent(r.actual, r.sarima).toFixed(1);
-      return `${r.hour},${r.actual},${r.prophet},${r.xgboost},${r.sarima},${pe},${xe},${se}`;
+      return `${r.hour},${r.actual},${r.prophet},${r.xgboost},${pe},${xe}`;
     });
     const blob = new Blob([header + csvRows.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "tahmin_verileri.csv";
+    a.download = `tahmin_verileri_${period}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [rows]);
+  }, [rows, period]);
 
   return (
     <Card data-onboarding="forecast-table">
@@ -59,18 +69,36 @@ export function ForecastTable({ rows }: ForecastTableProps) {
         <CardTitle className="flex items-center justify-between text-base sm:text-lg">
           <span className="flex items-center gap-2">
             Tahmin Veri Tablosu
-            <InfoTooltip text="Her saat için gerçek tüketim ve 3 modelin tahmin değerlerini gösterir. Hata sütunları yüzde sapmayı belirtir: yeşil %5 altı (iyi), sarı %5-10 (orta), kırmızı %10 üstü (düşük doğruluk). CSV butonu ile verileri indirebilirsiniz." />
+            <InfoTooltip text="Her saat için gerçek tüketim ve 2 modelin tahmin değerlerini gösterir. Hata sütunları yüzde sapmayı belirtir: yeşil %5 altı (iyi), sarı %5-10 (orta), kırmızı %10 üstü (düşük doğruluk). CSV butonu ile verileri indirebilirsiniz." />
           </span>
           <Button variant="outline" size="sm" onClick={exportCSV}>
             <Download className="mr-1 h-4 w-4" />
             CSV
           </Button>
         </CardTitle>
+        <div className="flex flex-wrap gap-1 pt-1">
+          {TABLE_PERIODS.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => onPeriodChange(p.key)}
+              className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors sm:px-3 sm:text-xs ${
+                period === p.key
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="pt-1 text-xs text-muted-foreground">
+          {rows.length} satır gösteriliyor
+        </div>
       </CardHeader>
       <CardContent className="px-2 sm:px-6">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
           <table className="w-full text-xs sm:text-sm">
-            <thead>
+            <thead className="sticky top-0 bg-background z-10">
               <tr className="border-b text-left text-muted-foreground">
                 <th className="p-2 font-medium sm:p-3">Saat</th>
                 <th className="p-2 font-medium text-right sm:p-3">Gerçek</th>
@@ -78,15 +106,12 @@ export function ForecastTable({ rows }: ForecastTableProps) {
                 <th className="p-2 font-medium text-right sm:p-3">Hata</th>
                 <th className="p-2 font-medium text-right sm:p-3">XGBoost</th>
                 <th className="p-2 font-medium text-right sm:p-3">Hata</th>
-                <th className="p-2 font-medium text-right sm:p-3">SARIMA</th>
-                <th className="p-2 font-medium text-right sm:p-3">Hata</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row, idx) => {
                 const pe = errorPercent(row.actual, row.prophet);
                 const xe = errorPercent(row.actual, row.xgboost);
-                const se = errorPercent(row.actual, row.sarima);
                 return (
                   <tr key={idx} className="border-b last:border-0 hover:bg-muted/50">
                     <td className="p-2 font-medium sm:p-3">{row.hour}</td>
@@ -98,10 +123,6 @@ export function ForecastTable({ rows }: ForecastTableProps) {
                     <td className="p-2 text-right sm:p-3">{row.xgboost.toLocaleString("tr-TR")}</td>
                     <td className={`p-2 text-right font-mono sm:p-3 ${errorColor(xe)} ${errorBg(xe)} rounded`}>
                       {xe.toFixed(1)}%
-                    </td>
-                    <td className="p-2 text-right sm:p-3">{row.sarima.toLocaleString("tr-TR")}</td>
-                    <td className={`p-2 text-right font-mono sm:p-3 ${errorColor(se)} ${errorBg(se)} rounded`}>
-                      {se.toFixed(1)}%
                     </td>
                   </tr>
                 );

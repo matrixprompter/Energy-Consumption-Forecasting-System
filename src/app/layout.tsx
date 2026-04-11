@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Enerji Tahmin Dashboard",
-  description: "Prophet, XGBoost ve SARIMA ile saatlik enerji tüketim tahmini",
+  description: "Prophet ve XGBoost ile saatlik enerji tüketim tahmini",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

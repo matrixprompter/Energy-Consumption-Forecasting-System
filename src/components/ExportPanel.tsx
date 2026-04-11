@@ -11,7 +11,6 @@ interface ForecastRow {
   actual: number;
   prophet: number;
   xgboost: number;
-  sarima: number;
 }
 
 interface ExportPanelProps {
@@ -84,7 +83,6 @@ export function ExportPanel({
       pdf.text("Gercek", 35, yPos);
       pdf.text("Prophet", 65, yPos);
       pdf.text("XGBoost", 95, yPos);
-      pdf.text("SARIMA", 125, yPos);
       yPos += 2;
       pdf.line(14, yPos, pageWidth - 14, yPos);
       yPos += 5;
@@ -99,7 +97,6 @@ export function ExportPanel({
         pdf.text(row.actual.toLocaleString("tr-TR"), 35, yPos);
         pdf.text(row.prophet.toLocaleString("tr-TR"), 65, yPos);
         pdf.text(row.xgboost.toLocaleString("tr-TR"), 95, yPos);
-        pdf.text(row.sarima.toLocaleString("tr-TR"), 125, yPos);
         yPos += 6;
       }
 
@@ -121,7 +118,6 @@ export function ExportPanel({
           "Gerçek": r.actual,
           Prophet: r.prophet,
           XGBoost: r.xgboost,
-          SARIMA: r.sarima,
         }));
         const ws = XLSX.utils.json_to_sheet(rows);
         XLSX.utils.book_append_sheet(wb, ws, "Tahmin Verileri");
@@ -144,9 +140,9 @@ export function ExportPanel({
 
   function exportCSV() {
     if (forecastData.length === 0) return;
-    const header = "Saat,Gerçek,Prophet,XGBoost,SARIMA\n";
+    const header = "Saat,Gerçek,Prophet,XGBoost\n";
     const csvRows = forecastData.map((r) =>
-      `${r.hour},${r.actual},${r.prophet},${r.xgboost},${r.sarima}`
+      `${r.hour},${r.actual},${r.prophet},${r.xgboost}`
     );
     const blob = new Blob([header + csvRows.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
