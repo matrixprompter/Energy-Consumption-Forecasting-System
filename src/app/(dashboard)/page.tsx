@@ -565,17 +565,15 @@ export default function DashboardPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
         <Select options={PERIOD_OPTIONS} value={period} onChange={(e) => setPeriod(e.target.value)} />
         <Select options={MODEL_OPTIONS} value={model} onChange={(e) => setModel(e.target.value)} />
-        {apiAvailable && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefreshData}
-            disabled={dataRefreshing}
-            className="self-start"
-          >
-            {dataRefreshing ? "Güncelleniyor..." : "Verileri Güncelle"}
-          </Button>
-        )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleRefreshData}
+          disabled={dataRefreshing || !apiAvailable}
+          className="self-start"
+        >
+          {dataRefreshing ? "Güncelleniyor..." : "Verileri Güncelle"}
+        </Button>
         {refreshMsg && (
           <span className="self-start rounded-md bg-blue-100 px-3 py-1 text-xs text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
             {refreshMsg}
