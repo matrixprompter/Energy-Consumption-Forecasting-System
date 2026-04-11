@@ -17,6 +17,22 @@ interface FeatureImportanceProps {
 }
 
 export function FeatureImportance({ features }: FeatureImportanceProps) {
+  if (!features || features.length === 0) {
+    return (
+      <Card data-onboarding="feature-importance">
+        <CardHeader className="px-4 pb-2 sm:px-6">
+          <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+            Özellik Önemi (XGBoost SHAP)
+            <InfoTooltip text="SHAP (SHapley Additive exPlanations) değerleri, her özelliğin tahmin üzerindeki etkisini gösterir. Daha yüksek değer, o özelliğin model kararına daha fazla etki ettiğini gösterir." />
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex h-[300px] items-center justify-center text-muted-foreground text-sm">
+          SHAP verileri henüz mevcut değil. Modeller eğitildikten sonra burada görünecek.
+        </CardContent>
+      </Card>
+    );
+  }
+
   const sorted = [...features].sort((a, b) => b.shap_value - a.shap_value);
   const maxVal = sorted[0]?.shap_value ?? 1;
 

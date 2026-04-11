@@ -133,7 +133,7 @@ export default function DashboardPage() {
   const [period, setPeriod] = useState("live24h");
   const [model, setModel] = useState("xgboost");
   const [periodData, setPeriodData] = useState<Record<string, PeriodComparison>>({});
-  const [features] = useState<Array<{ name: string; feature: string; shap_value: number }>>([]);
+  const [features, setFeatures] = useState<Array<{ name: string; feature: string; shap_value: number }>>([]);
   const [dataLoaded, setDataLoaded] = useState(false);
 
   const [timeline, setTimeline] = useState<TimelineData | null>(null);
@@ -187,7 +187,18 @@ export default function DashboardPage() {
         }
       } catch { /* opsiyonel */ }
 
-      // 3. Forecasts tablosundan tahmin verilerini çek
+      // 3. SHAP verilerini Supabase'den çek
+      try {
+        const shapRes = await fetch("/api/forecast/shap");
+        if (shapRes.ok) {
+          const shapData = await shapRes.json();
+          if (shapData.features && shapData.features.length > 0) {
+            setFeatures(shapData.features);
+          }
+        }
+      } catch { /* opsiyonel */ }
+
+      // Forecasts tablosundan tahmin verilerini çek
       try {
         const fcRes = await fetch("/api/forecast/latest");
         if (fcRes.ok) {
@@ -207,7 +218,7 @@ export default function DashboardPage() {
         }
       } catch { /* opsiyonel */ }
 
-      // 4. Timeline ve tablo oluştur
+      // Timeline ve tablo oluştur
       const sorted = readingsRef.current.sorted;
       const preds = tablePredsRef.current;
       if (sorted.length > 0) {

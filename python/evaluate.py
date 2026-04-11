@@ -369,7 +369,9 @@ def save_comparisons_to_supabase(results: dict) -> None:
 
 
 def save_forecasts_to_supabase(results: dict) -> None:
-    """Her model icin forecasts tablosuna kaydet."""
+    """Her model icin forecasts tablosuna kaydet. XGBoost icin SHAP de kaydeder."""
+    import json
+
     for model_name in ["prophet", "xgboost"]:
         preds = results[model_name]["all_pred"]
 
@@ -377,21 +379,25 @@ def save_forecasts_to_supabase(results: dict) -> None:
         period_data = results["periods"].get("7d") or next(iter(results["periods"].values()))
         metrics = period_data[model_name]
 
-        get_supabase().table("forecasts").insert(
-            {
-                "model_name": model_name,
-                "forecast_horizon": len(preds),
-                "predictions": [
-                    {"timestamp": "", "value": round(float(p), 2), "lower": 0, "upper": 0}
-                    if isinstance(p, (int, float))
-                    else p
-                    for p in preds[:168]  # Son 7 gun
-                ],
-                "mape": metrics["mape"],
-                "rmse": metrics["rmse"],
-                "mae": metrics["mae"],
-            }
-        ).execute()
+        row: dict = {
+            "model_name": model_name,
+            "forecast_horizon": len(preds),
+            "predictions": [
+                {"timestamp": "", "value": round(float(p), 2), "lower": 0, "upper": 0}
+                if isinstance(p, (int, float))
+                else p
+                for p in preds[:168]  # Son 7 gun
+            ],
+            "mape": metrics["mape"],
+            "rmse": metrics["rmse"],
+            "mae": metrics["mae"],
+        }
+
+        # XGBoost SHAP degerlerini metadata sutununa kaydet
+        if model_name == "xgboost" and "shap" in results[model_name]:
+            row["metadata"] = json.dumps({"shap": results[model_name]["shap"]})
+
+        get_supabase().table("forecasts").insert(row).execute()
 
     print("forecasts tablosuna kaydedildi.")
 
