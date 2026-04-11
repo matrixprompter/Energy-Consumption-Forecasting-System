@@ -234,13 +234,62 @@ export default function DashboardPage() {
         if (shapData.features?.length > 0) setFeatures(shapData.features);
       }
 
-      // Adım 7: Dashboard güncelle
+      // Adım 7: Dashboard güncelle — tüm veriyi yükle
       setRefreshStep(REFRESH_STEPS[6]);
-      readingsRef.current = { periodKey: "", sorted: [] };
-      tableReadingsRef.current = { periodKey: "", sorted: [] };
+
+      // Enerji verisi çek (Supabase → Next.js API)
+      const energyRes = await fetch(
+        `/api/energy?from=${from.toISOString()}&to=${now.toISOString()}&limit=${7 * 24}`
+      );
+      if (energyRes.ok) {
+        const energyData = await energyRes.json();
+        const readings: EnergyReading[] = energyData.data || [];
+        const sorted = sortReadings(readings);
+
+        if (sorted.length > 0) {
+          readingsRef.current = { periodKey: "7", sorted };
+          setHeatmap(buildHeatmapFromReadings(sorted));
+
+          // Tahminleri çek
+          let preds = { prophet: [] as number[], xgboost: [] as number[] };
+          try {
+            const [pRes, xRes] = await Promise.all([
+              fetch(`${ML_API}/forecast`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: "prophet", horizon: 24, region: "TR" }),
+              }),
+              fetch(`${ML_API}/forecast`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: "xgboost", horizon: 24, region: "TR" }),
+              }),
+            ]);
+            if (pRes.ok) preds.prophet = (await pRes.json()).predictions.map((p: { value: number }) => p.value);
+            if (xRes.ok) preds.xgboost = (await xRes.json()).predictions.map((p: { value: number }) => p.value);
+          } catch { /* tahminler opsiyonel */ }
+
+          tablePredsRef.current = preds;
+          tableReadingsRef.current = { periodKey: "1", sorted: sorted.slice(-24) };
+
+          // Timeline (grafik)
+          let forecastPreds: Array<{ value: number; lower: number; upper: number }> = [];
+          try {
+            const fRes = await fetch(`${ML_API}/forecast`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ model, horizon: Math.min(sorted.length, 168), region: "TR" }),
+            });
+            if (fRes.ok) forecastPreds = (await fRes.json()).predictions || [];
+          } catch { /* grafik gerçek veriyi gösterir */ }
+
+          setTimeline(buildTimelineFromReadings(sorted, forecastPreds));
+          setTableRows(buildTableRows(sorted.slice(-24), preds));
+        }
+      }
+
       setReadingsVersion((v) => v + 1);
       setDataLoaded(true);
-
       setRefreshMsg(`${rowCount} satır güncellendi`);
     } catch {
       setRefreshMsg("Bağlantı hatası — ML API çalışıyor mu?");
