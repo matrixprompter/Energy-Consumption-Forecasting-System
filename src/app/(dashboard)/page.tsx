@@ -1,8 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
 import { KPICards } from "@/components/KPICards";
 import { HeatmapChart } from "@/components/HeatmapChart";
 import { ScenarioAnalysis } from "@/components/ScenarioAnalysis";
@@ -223,6 +224,8 @@ export default function DashboardPage() {
   const [features, setFeatures] = useState(DEMO_FEATURES);
   const [initialLoading, setInitialLoading] = useState(true);
 
+  const [dataRefreshing, setDataRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<TimelineData | null>(null);
   const [heatmap, setHeatmap] = useState<number[][] | null>(null);
   const [tableRows, setTableRows] = useState<Array<{
@@ -241,6 +244,42 @@ export default function DashboardPage() {
 
   const periodDays = period === "live24h" ? 1 : period === "1d" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : period === "180d" ? 180 : 365;
   const tablePeriodDays = tablePeriod === "live24h" ? 1 : tablePeriod === "1d" ? 1 : tablePeriod === "7d" ? 7 : tablePeriod === "30d" ? 30 : tablePeriod === "90d" ? 90 : tablePeriod === "180d" ? 180 : 365;
+
+  // ── Verileri Güncelle butonu ──
+  const handleRefreshData = useCallback(async () => {
+    if (!apiAvailable || dataRefreshing) return;
+    setDataRefreshing(true);
+    setRefreshMsg(null);
+
+    try {
+      const now = new Date();
+      const from = new Date(now.getTime() - 7 * 24 * 3600000); // Son 7 gün
+      const res = await fetch(`${ML_API}/update-data`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from_date: from.toISOString().slice(0, 10),
+          to_date: now.toISOString().slice(0, 10),
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setRefreshMsg(`${data.rows_inserted} satır güncellendi`);
+        // Cache'leri temizle ve veriyi yeniden yükle
+        readingsRef.current = { periodKey: "", sorted: [] };
+        tableReadingsRef.current = { periodKey: "", sorted: [] };
+        setReadingsVersion((v) => v + 1);
+      } else {
+        setRefreshMsg("Güncelleme başarısız");
+      }
+    } catch {
+      setRefreshMsg("API bağlantı hatası");
+    } finally {
+      setDataRefreshing(false);
+      setTimeout(() => setRefreshMsg(null), 5000);
+    }
+  }, [apiAvailable, dataRefreshing]);
 
   // ── 1) Başlangıç: ML API kontrol + karşılaştırma + SHAP ──
   useEffect(() => {
@@ -526,6 +565,22 @@ export default function DashboardPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
         <Select options={PERIOD_OPTIONS} value={period} onChange={(e) => setPeriod(e.target.value)} />
         <Select options={MODEL_OPTIONS} value={model} onChange={(e) => setModel(e.target.value)} />
+        {apiAvailable && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefreshData}
+            disabled={dataRefreshing}
+            className="self-start"
+          >
+            {dataRefreshing ? "Güncelleniyor..." : "Verileri Güncelle"}
+          </Button>
+        )}
+        {refreshMsg && (
+          <span className="self-start rounded-md bg-blue-100 px-3 py-1 text-xs text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+            {refreshMsg}
+          </span>
+        )}
         {!apiAvailable && (
           <span className="self-start rounded-md bg-yellow-100 px-3 py-1 text-xs text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300">
             Demo modu — ML API bağlı değil
